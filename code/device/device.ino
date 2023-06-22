@@ -8,6 +8,7 @@
 // Provide the RTDB payload printing info and other helper functions.
 #include <addons/RTDBHelper.h>
 #include <Adafruit_NeoPixel.h>
+#include <list>
 
 #define MQTT_SERVER "mqtt.cetools.org"
 #define MQTT_TOPIC "UCL/OPS/107/EM/gosund/#"
@@ -30,9 +31,10 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 unsigned long dataMillis = 0;
-int count = 0;
+int deviceCount = 0;
 int led = LED_BUILTIN;
 bool booting = false;
+std::list<String> deviceList;
 
 void setup()
 {
@@ -40,7 +42,7 @@ void setup()
 
     //Initalise single NeoPixel
     singlePixel.begin();
-    singlePixel.setBrightness(128); // Half brightness
+    singlePixel.setBrightness(64); // Set ESP32 Neopixel brightness
     singlePixel.show();
 
     // set LED(13) to be an output pin
@@ -122,25 +124,47 @@ void loop() {
 
 
 void callback(char* topic, byte* payload, unsigned int length) {
-    if (!booting) {
+  String topicString(topic);
+  int lastSlash = topicString.lastIndexOf('/');
+  String lastSection = topicString.substring(0, lastSlash);  // Get the string up to the last '/'
+  lastSlash = lastSection.lastIndexOf('/');  // Find the position of the second last '/'
+  String deviceName = lastSection.substring(lastSlash + 1);  // Extract the section after the second last '/'
+
+  if (topicString.indexOf("LWT") != -1 && std::find(deviceList.begin(), deviceList.end(), deviceName) == deviceList.end()) {
+    deviceCount++;
+    deviceList.push_back(deviceName);
+    Serial.print("Number of devices: ");
+    Serial.println(deviceCount);
+
+    Serial.print("Contents of topicList:");
+    for (String deviceTopic : deviceList) {
+      Serial.print(deviceTopic);
+      Serial.print(", ");
+    }
+    Serial.println("");
+  }
+  // If the device under booting sequence, don't send the messages to Firebase
+  if (!booting) {
     return;
   }
-  Serial.println("Message is:");
-  char msg[length+1];
-  memcpy (msg, payload, length);
-  msg[length] = '\0';
-  Serial.printf("Message arrived: %s\n", msg);
+  // Serial.println("Message is:");
+  // char msg[length+1];
+  // memcpy (msg, payload, length);
+  // msg[length] = '\0';
+  // Serial.printf("Message arrived: %s\n", msg);
 
-  String path = "/UsersData/";
-  path += auth.token.uid.c_str();
-  path += "/test/data";
 
-  FirebaseJson json;
-  json.set("topic", topic);
-  json.set("value", msg);
-  json.set("timestamp", Firebase.getCurrentTime());
+  // Send Data to Firebase
+  // String path = "/UsersData/";
+  // path += auth.token.uid.c_str();
+  // path += "/test/data";
 
-  Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, path, json) ? "ok" : fbdo.errorReason().c_str());
+  // FirebaseJson json;
+  // json.set("topic", topic);
+  // json.set("value", msg);
+  // json.set("timestamp", Firebase.getCurrentTime());
+
+  // Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, path, json) ? "ok" : fbdo.errorReason().c_str());
 }
 
 void reconnect() {
