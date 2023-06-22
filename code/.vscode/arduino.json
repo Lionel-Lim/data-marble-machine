@@ -1,0 +1,6 @@
+{
+    "configuration": "FlashFreq=80,UploadSpeed=921600,PartitionScheme=default,DebugLevel=none",
+    "board": "firebeetle32:esp32:firebeetle32",
+    "port": "/dev/tty.usbserial-10",
+    "sketch": "mqtt2Firebase/main/main.ino"
+}

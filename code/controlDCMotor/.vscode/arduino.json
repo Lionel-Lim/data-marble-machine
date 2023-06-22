@@ -1,0 +1,6 @@
+{
+    "port": "/dev/tty.usbserial-210",
+    "configuration": "FlashFreq=80,UploadSpeed=921600,PartitionScheme=default,DebugLevel=none",
+    "board": "firebeetle32:esp32:firebeetle32",
+    "sketch": "main/main.ino"
+}
