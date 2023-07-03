@@ -8,7 +8,8 @@
 // Provide the RTDB payload printing info and other helper functions.
 #include <addons/RTDBHelper.h>
 #include <Adafruit_NeoPixel.h>
-#include <list>
+#include <ArduinoJson.h>
+#include <map>
 
 #define MQTT_SERVER "mqtt.cetools.org"
 #define MQTT_TOPIC "UCL/OPS/107/EM/gosund/#"
@@ -18,7 +19,7 @@
 #define PIXEL_PIN 0
 
 // Declare a NeoPixel object
-Adafruit_NeoPixel singlePixel(1, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel singlePixel(1, PIXEL_PIN, NEO_RGB);
 
 // Define the Firebase Data object
 FirebaseData fbdo;
@@ -26,15 +27,33 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 // Define the FirebaseConfig data for config data
 FirebaseConfig config;
-
+// Define Json handling
+DynamicJsonDocument incoming(512);
+// Define WiFi client
 WiFiClient espClient;
+// Define MQTT client
 PubSubClient client(espClient);
 
-unsigned long dataMillis = 0;
+// Define a struct to hold the data for each device
+struct DeviceData {
+  unsigned long lastUpdated;
+  int power;
+  float today;
+  float yesterday;
+  float total;
+  String time;
+  String startDate;
+};
+
+unsigned long liveDataMillis = 0;
+unsigned long historyDataMillis = 0;
 int deviceCount = 0;
 int led = LED_BUILTIN;
-bool booting = false;
-std::list<String> deviceList;
+std::map<String, DeviceData> deviceList;
+FirebaseJson liveOverallJson;
+FirebaseJson historyOverallJson;
+String defaultPath = "/Data/";
+String liveOverallPath = defaultPath;
 
 void setup()
 {
@@ -87,37 +106,38 @@ void setup()
     client.setServer(MQTT_SERVER, 1883);
     client.setCallback(callback);
     client.setBufferSize(512);
+
+    // Set paths for Firebase
+    liveOverallPath += auth.token.uid.c_str();
+    liveOverallPath += "/UCL/OPS/107/EM/Live/overall";
 }
 
 
 void loop() {
   if (!client.connected()) {
-    // While connecting to MQTT, light up red color
-    singlePixel.setPixelColor(0, singlePixel.Color(255, 0, 0)); // Red color
-    singlePixel.setPixelColor(1, singlePixel.Color(255, 0, 0)); // Red color
-    singlePixel.show(); // Apply the color
     reconnect();
   }
-  // Once MQTT is connected
-  else if (booting == false) {
-    booting = true;
-    // Light up green color
-    singlePixel.setPixelColor(0, singlePixel.Color(0, 255, 0)); // Green color
-    singlePixel.setPixelColor(1, singlePixel.Color(0, 255, 0)); // Green color
-    singlePixel.show(); // Apply the color
-    delay(2000); // Wait for 2 seconds
-
-    uint32_t startMillis = millis();
-    Serial.print("Booting Started at: ");
-    Serial.println(startMillis);
-    while (millis() - startMillis < 5) { // Run for 5 seconds
-      rainbow(5, singlePixel);
+  // Check for inactive devices every minute and Update overall data
+  if (millis() - liveDataMillis > 60000) {
+    digitalWrite(led, HIGH); // Indicating LED
+    for (auto it = deviceList.begin(); it != deviceList.end(); ) {
+      if (millis() - it->second.lastUpdated > 60000) {  // 60000 milliseconds = 1 minute
+        it = deviceList.erase(it); // remove the device from the list
+        deviceCount--; // decrement the device count
+      } else {
+        ++it;
+      }
     }
+    liveDataMillis = millis();
 
-    // Turn off LED
-    singlePixel.clear(); // Clear the color
-    singlePixel.show(); // Apply the color
-    Serial.println("Booting Finished.");
+    Serial.println(updateOverallLive());
+
+    digitalWrite(led, LOW);
+  }
+  // Update history data every 30 mins
+  if (millis() - historyDataMillis > 1800000) {
+    historyDataMillis = millis();
+    Serial.println(updateHistory());
   }
   client.loop();
 }
@@ -130,22 +150,59 @@ void callback(char* topic, byte* payload, unsigned int length) {
   lastSlash = lastSection.lastIndexOf('/');  // Find the position of the second last '/'
   String deviceName = lastSection.substring(lastSlash + 1);  // Extract the section after the second last '/'
 
-  if (topicString.indexOf("LWT") != -1 && std::find(deviceList.begin(), deviceList.end(), deviceName) == deviceList.end()) {
+  // Check number of device
+  if (topicString.indexOf("LWT") != -1 && deviceList.find(deviceName) == deviceList.end()) {
     deviceCount++;
-    deviceList.push_back(deviceName);
+    DeviceData data;
+    data.lastUpdated = millis();
+    deviceList[deviceName] = data;
+
     Serial.print("Number of devices: ");
     Serial.println(deviceCount);
 
     Serial.print("Contents of topicList:");
-    for (String deviceTopic : deviceList) {
-      Serial.print(deviceTopic);
+    for (auto& device : deviceList) {
+      Serial.print(device.first);
       Serial.print(", ");
     }
     Serial.println("");
   }
-  // If the device under booting sequence, don't send the messages to Firebase
-  if (!booting) {
-    return;
+
+  // Check SENSOR value
+  if (topicString.indexOf("SENSOR") != -1) {
+    DeviceData data;
+    data.lastUpdated = millis(); // Record received time
+    char msg[length+1]; //Convert the bytes data to char
+    memcpy (msg, payload, length);
+    msg[length] = '\0';
+    DeserializationError error = deserializeJson(incoming, msg); // Convert the Char data to Json format
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+    data.time = String(incoming["Time"].as<const char*>());
+    data.startDate = String(incoming["ENERGY"]["TotalStartTime"].as<const char*>());
+    data.total = incoming["ENERGY"]["Total"];
+    data.today = incoming["ENERGY"]["Today"];
+    data.yesterday = incoming["ENERGY"]["Yesterday"];
+    data.power = incoming["ENERGY"]["Power"];
+
+    deviceList[deviceName] = data;
+
+    String livePath = defaultPath;
+    livePath += auth.token.uid.c_str();
+    livePath += "/UCL/OPS/107/EM/Live/";
+    livePath += deviceName;
+
+    FirebaseJson liveJson;
+    liveJson.set("time", data.time);
+    liveJson.set("power", data.power);
+
+    liveOverallJson.set("time", data.time);
+    historyOverallJson.set("time", data.time);
+
+    Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, livePath, liveJson) ? "ok" : fbdo.errorReason().c_str());
   }
   // Serial.println("Message is:");
   // char msg[length+1];
@@ -185,26 +242,82 @@ void reconnect() {
   }
 }
 
-// Rainbow cycle along whole neoPixel. Pass delay time (in ms) between frames.
-void rainbow(int wait, Adafruit_NeoPixel neoPixel) {
-  // Hue of first pixel runs 3 complete loops through the color wheel.
-  // Color wheel has a range of 65536 but it's OK if we roll over, so
-  // just count from 0 to 3*65536. Adding 256 to firstPixelHue each time
-  // means we'll make 3*65536/256 = 768 passes through this outer loop:
-  for(long firstPixelHue = 0; firstPixelHue < 3*65536; firstPixelHue += 256) {
-    for(int i=0; i<neoPixel.numPixels(); i++) { // For each pixel in strip...
-      // Offset pixel hue by an amount to make one full revolution of the
-      // color wheel (range of 65536) along the length of the strip
-      // (neoPixel.numPixels() steps):
-      int pixelHue = firstPixelHue + (i * 65536L / neoPixel.numPixels());
-      // neoPixel.ColorHSV() can take 1 or 3 arguments: a hue (0 to 65535) or
-      // optionally add saturation and value (brightness) (each 0 to 255).
-      // Here we're using just the single-argument hue variant. The result
-      // is passed through neoPixel.gamma32() to provide 'truer' colors
-      // before assigning to each pixel:
-      neoPixel.setPixelColor(i, neoPixel.gamma32(neoPixel.ColorHSV(pixelHue)));
-    }
-    neoPixel.show(); // Update neoPixel with new contents
-    delay(wait);  // Pause for a moment
+int sumPower() {
+  int totalPower = 0;
+  for(auto const& pair : deviceList){
+    totalPower += pair.second.power;
   }
+  return totalPower;
+}
+
+float sumTotalUse() {
+  float totalUse = 0;
+  for(auto const& pair : deviceList){
+    totalUse += pair.second.total;
+  }
+  return totalUse;
+}
+
+float sumTodayUse() {
+  float totalUse = 0;
+  for(auto const& pair : deviceList){
+    totalUse += pair.second.today;
+  }
+  return totalUse;
+}
+
+float sumYesterdayUse() {
+  float YesterdayUse = 0;
+  for(auto const& pair : deviceList){
+    YesterdayUse += pair.second.yesterday;
+  }
+  return YesterdayUse;
+}
+
+String updateOverallLive() {
+  liveOverallJson.set("devices", deviceCount);
+  liveOverallJson.set("power", sumPower());
+  
+  if (Firebase.pushJSON(fbdo, liveOverallPath, liveOverallJson)) {
+    return "Overall Data:Success";
+  } else {
+    return fbdo.errorReason().c_str();
+  }
+}
+
+String updateHistory() {
+  String result = "History Data:";
+  String historyOverallPath;
+  for(auto const& pair : deviceList){
+    String historyPath = defaultPath;
+    historyPath += auth.token.uid.c_str();
+    historyPath += "/UCL/OPS/107/EM/History/";
+    historyOverallPath = historyPath;
+    historyOverallPath += "Overall";
+    historyPath += pair.first;
+
+    FirebaseJson historyJson;
+    historyJson.set("time", pair.second.time);
+    historyJson.set("total", pair.second.total);
+    historyJson.set("today", pair.second.today);
+    historyJson.set("yesterday", pair.second.yesterday);
+    historyJson.set("startDate", pair.second.startDate);
+
+    if (Firebase.pushJSON(fbdo, historyPath, historyJson)) {
+      result += "Success///";
+    } else {
+      result += fbdo.errorReason().c_str();
+      result += "///";
+    }
+  }
+  historyOverallJson.set("total", sumTotalUse());
+  historyOverallJson.set("today", sumTodayUse());
+  historyOverallJson.set("yesterday", sumYesterdayUse());
+  if (Firebase.pushJSON(fbdo, historyOverallPath, historyOverallJson)) {
+    result += "Success///";
+  } else {
+    result += fbdo.errorReason().c_str();
+  }
+  
+  return result;
 }

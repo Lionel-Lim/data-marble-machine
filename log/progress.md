@@ -1,4 +1,11 @@
 # Making progress
+## 24 June 2023
+1. Selecting suitable LED Strip
+   1. They are usually 12mm thickness.
+   2. Adafruit provides 4mm thickness LED strip. but not durable.
+## 25 June 2023
+1. The marble machine design is not suitable for moving parts.
+2. Acrylic glue is reacting with fingerprint
 ## 26 June 2023
 1. Tried different materials for the wheel.
    1. Transparent Acrylic
