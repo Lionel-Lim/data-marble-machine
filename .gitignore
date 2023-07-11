@@ -70,3 +70,4 @@ nbbuild.xml
 nbproject
 code/device/secrets.h
 confidential/
+secrets.h

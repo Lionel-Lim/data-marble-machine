@@ -47,6 +47,7 @@ struct DeviceData {
 
 unsigned long liveDataMillis = 0;
 unsigned long historyDataMillis = 0;
+unsigned long testMillis = 0;
 int deviceCount = 0;
 int led = LED_BUILTIN;
 std::map<String, DeviceData> deviceList;
@@ -103,6 +104,9 @@ void setup()
     /* Initialize the library with the Firebase authen and config */
     Firebase.begin(&config, &auth);
 
+    // Or refresh token manually
+    // Firebase.refreshToken(&config);
+
     client.setServer(MQTT_SERVER, 1883);
     client.setCallback(callback);
     client.setBufferSize(512);
@@ -139,6 +143,7 @@ void loop() {
     historyDataMillis = millis();
     Serial.println(updateHistory());
   }
+
   client.loop();
 }
 
@@ -152,6 +157,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   // Check number of device
   if (topicString.indexOf("LWT") != -1 && deviceList.find(deviceName) == deviceList.end()) {
+    // TODO : Count the number of device regularly 
     deviceCount++;
     DeviceData data;
     data.lastUpdated = millis();
@@ -175,7 +181,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     char msg[length+1]; //Convert the bytes data to char
     memcpy (msg, payload, length);
     msg[length] = '\0';
-    DeserializationError error = deserializeJson(incoming, msg); // Convert the Char data to Json format
+    DeserializationError error = deserializJson(incoming, msg); // Convert the Char data to Json format
     if (error) {
       Serial.print(F("deserializeJson() failed: "));
       Serial.println(error.f_str());
@@ -202,26 +208,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
     liveOverallJson.set("time", data.time);
     historyOverallJson.set("time", data.time);
 
-    Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, livePath, liveJson) ? "ok" : fbdo.errorReason().c_str());
+    if (Firebase.pushJSON(fbdo, livePath, liveJson)){
+      Serial.printf("Push data... %s\n", "ok");
+    }else{
+      Serial.printf("Error: \n%s", fbdo.errorReason().c_str());
+      refreshFirebase();
+    }
+
+    // Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, livePath, liveJson) ? "ok" : fbdo.errorReason().c_str());
   }
-  // Serial.println("Message is:");
-  // char msg[length+1];
-  // memcpy (msg, payload, length);
-  // msg[length] = '\0';
-  // Serial.printf("Message arrived: %s\n", msg);
-
-
-  // Send Data to Firebase
-  // String path = "/UsersData/";
-  // path += auth.token.uid.c_str();
-  // path += "/test/data";
-
-  // FirebaseJson json;
-  // json.set("topic", topic);
-  // json.set("value", msg);
-  // json.set("timestamp", Firebase.getCurrentTime());
-
-  // Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, path, json) ? "ok" : fbdo.errorReason().c_str());
 }
 
 void reconnect() {
@@ -320,4 +315,16 @@ String updateHistory() {
   }
   
   return result;
+}
+
+bool refreshFirebase(){
+  Firebase.refreshToken(&config);
+  Serial.print("Token refreshed.");
+  if(Firebase.ready()){
+    Serial.println("Firebase Ready.");
+    return true;
+  }else{
+    Serial.print("Firebase Failed.");
+    return false;
+  }
 }
