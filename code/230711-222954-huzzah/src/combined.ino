@@ -34,6 +34,9 @@
 // MQTT Library
 #include <PubSubClient.h>
 
+// Adafruit Motor Shield Library
+#include <Adafruit_MotorShield.h>
+
 #include <map>
 
 // MQTT Server address
@@ -55,6 +58,8 @@
 /* This database secret required in this example to get the righs access to database rules */
 #define DATABASE_SECRET "DATABASE_SECRET"
 
+#define TOUCH_PIN 13
+
 // Define Firebase objects
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -71,6 +76,11 @@ Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 WiFiClient espClient;
 // Define MQTT client
 PubSubClient mqttClient(espClient);
+
+// Create the motor shield object with the default I2C address
+Adafruit_MotorShield AFMS = Adafruit_MotorShield();
+// Select which 'port' M1, M2, M3 or M4. In this case, M1
+Adafruit_DCMotor *myMotor = AFMS.getMotor(1);
 
 // Define a data structure for MQTT data processing
 struct DeviceData
@@ -95,6 +105,7 @@ int ledWait = 250;
 int liveLEDCount = 0;
 int lastLEDCount = 0;
 int liveLEDDefault = 19;
+int touchValue = 0;
 std::map<String, DeviceData> deviceList;
 FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
@@ -119,7 +130,7 @@ void setup()
 
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
   pixels.clear(); // Set all pixel colors to 'off'
-  pixels.setBrightness(10);
+  pixels.setBrightness(50);
   rainbowFade2White(5, 3, 3);
   pixels.clear(); // Set all pixel colors to 'off'
 
@@ -182,6 +193,17 @@ void setup()
   // Set query for Firebase
   query.orderBy("$key");
   query.limitToLast(1);
+
+  if (!AFMS.begin())
+  { // create with the default frequency 1.6KHz
+    // if (!AFMS.begin(1000)) {  // OR with a different frequency, say 1KHz
+    Serial.println("Could not find Motor Shield. Check wiring.");
+    while (1)
+      ;
+    Serial.println("Motor Shield found.");
+  }
+
+  pinMode(TOUCH_PIN, INPUT); // set GPIO as input
 }
 
 void loop()
@@ -245,8 +267,10 @@ void loop()
           {
             JsonObject value = keyValue.value();
             livePower = value["power"];
-            // assign random int value from 0 to 300 to livePower
+            // TEST: assign random int value from 0 to 300 to livePower
             livePower = int(random(0, 300));
+            // Run motor
+            myMotor->run(FORWARD);
             Serial.print("Live Power: ");
             Serial.println(livePower);
             break; // Exit the loop after the first key-value pair.
@@ -300,6 +324,10 @@ void loop()
           pixels.show();
         }
       }
+      // Set motor speed
+      int motorSpeed = int(map(lastLEDCount, 0, 20, 50, 150));
+      myMotor->setSpeed(motorSpeed);
+
       lastLEDMillis = millis();
     }
 
@@ -350,6 +378,14 @@ void loop()
   }
 
   initialising = false;
+
+  touchValue = digitalRead(TOUCH_PIN);
+  if (millis() - testMillis > 1000)
+  {
+    Serial.print("touch Value: ");
+    Serial.println(touchValue);
+    testMillis = millis();
+  }
 
   // Regularly check for MQTT connection
   mqttClient.loop();
