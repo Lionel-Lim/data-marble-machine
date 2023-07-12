@@ -87,6 +87,8 @@ struct DeviceData
 unsigned long liveDataMillis = 0;
 unsigned long historyDataMillis = 0;
 unsigned long testMillis = 0;
+unsigned long liveLEDMillis = 0;
+unsigned long dailyLEDMillis = 0;
 int deviceCount = 0;
 int led = LED_BUILTIN;
 std::map<String, DeviceData> deviceList;
@@ -94,25 +96,27 @@ FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
 String defaultPath = "/TEST/";
 String liveOverallPath = defaultPath;
-bool taskCompleted = false;
+bool initialising = true;
 int livePower = 0;
 int liveFactor = 15;
 float todayUse = 0;
 float todayFactor = 20;
+QueryFilter query;
+// TODO: Change the path dynamically in App or Web
+String livePath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/Live/overall";
+String historyPath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/History/Overall";
 
 void setup()
 {
   Serial.begin(115200);
   Serial.println();
   Serial.println();
-  pinMode(led, OUTPUT);
-  for (int i = 0; i < 5; i++)
-  {
-    digitalWrite(led, HIGH);
-    delay(1000);
-    digitalWrite(led, LOW);
-    delay(1000);
-  }
+
+  pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
+  pixels.clear(); // Set all pixel colors to 'off'
+  pixels.setBrightness(10);
+  rainbowFade2White(5, 3, 3);
+  pixels.clear(); // Set all pixel colors to 'off'
 
   WiFiManager wifiManager;
   // Uncomment to reset saved settings
@@ -161,9 +165,6 @@ void setup()
 
   Firebase.reconnectWiFi(true);
 
-  pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
-  pixels.setBrightness(10);
-
   // Set MQTT Server
   mqttClient.setServer(MQTT_SERVER, 1883);
   mqttClient.setCallback(callback);
@@ -172,6 +173,10 @@ void setup()
   // Set paths for Firebase
   liveOverallPath += auth.token.uid.c_str();
   liveOverallPath += "/UCL/OPS/107/EM/Live/overall";
+
+  // Set query for Firebase
+  query.orderBy("$key");
+  query.limitToLast(1);
 }
 
 void loop()
@@ -210,101 +215,104 @@ void loop()
     Serial.println(updateHistory());
   }
 
-  pixels.clear(); // Set all pixel colors to 'off'
-  pixels.setPixelColor(18, pixels.Color(255, 0, 0));
-
-  // Firebase.ready() should be called repeatedly to handle authentication tasks.
-  if (Firebase.ready() && !taskCompleted)
+  // Set NeoPixel color based on live data
+  if (Firebase.ready())
   {
-    taskCompleted = true;
-
-    QueryFilter query;
-
-    // Use "$key" as the orderBy parameter if the key of child nodes was used for the query
-    query.orderBy("$key");
-    query.limitToLast(1);
-
-    // Path to your data
-    String livePath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/Live/overall";
-    String historyPath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/History/Overall";
-
+    // pixels.clear(); // Set all pixel colors to 'off'
+    pixels.setPixelColor(18, pixels.Color(255, 0, 0));
     // Get live Data and set LED
-    if (Firebase.getJSON(fbdo, livePath.c_str(), query))
+    if (millis() - liveLEDMillis > 60000 || initialising)
     {
-      String msg = fbdo.jsonString();
-      const char *charMsg = msg.c_str();
-      Serial.println(msg);
-      DeserializationError error = deserializeJson(incomingLive, charMsg);
-      if (error)
+      if (Firebase.getJSON(fbdo, livePath.c_str(), query))
       {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.f_str());
+        String msg = fbdo.jsonString();
+        const char *charMsg = msg.c_str();
+        Serial.println(msg);
+        DeserializationError error = deserializeJson(incomingLive, charMsg);
+        if (error)
+        {
+          Serial.print(F("deserializeJson() failed: "));
+          Serial.println(error.f_str());
+        }
+        else
+        {
+          for (JsonPair keyValue : incomingLive.as<JsonObject>())
+          {
+            JsonObject value = keyValue.value();
+            livePower = value["power"];
+            // assign random int value from 0 to 300 to livePower
+            // livePower = int(random(0, 300));
+            Serial.print("Live Power: ");
+            Serial.println(livePower);
+            break; // Exit the loop after the first key-value pair.
+          }
+          for (int i = 19; i < 40; i++)
+          {
+            pixels.setPixelColor(i, pixels.Color(0, 0, 0));
+          }
+          // TODO: Calculate the number of LED to light up based on the average over time
+          for (int i = 19; i < 19 + (livePower / liveFactor); i++)
+          {
+            pixels.setPixelColor(i, pixels.Color(232, 229, 88));
+          }
+        }
+        pixels.show(); // Send the updated pixel colors to the hardware.
+        liveLEDMillis = millis();
       }
       else
       {
-        for (JsonPair keyValue : incomingLive.as<JsonObject>())
-        {
-          JsonObject value = keyValue.value();
-          livePower = value["power"];
-          Serial.println(livePower);
-          break; // Exit the loop after the first key-value pair.
-        }
-        // TODO: Calculate the number of LED to light up based on the average over time
-        for (int i = 19; i < 19 + (livePower / liveFactor); i++)
-        {
-          pixels.setPixelColor(i, pixels.Color(232, 229, 88));
-        }
+        // Failed to get JSON data at defined database path, print out the error reason
+        Serial.println(fbdo.errorReason());
       }
-    }
-    else
-    {
-      // Failed to get JSON data at defined database path, print out the error reason
-      Serial.println(fbdo.errorReason());
     }
 
     // Get history data and set LED
-    if (Firebase.getJSON(fbdo, historyPath.c_str(), query))
+    if (millis() - dailyLEDMillis > 600000 || initialising)
     {
-      String msg = fbdo.jsonString();
-      const char *charMsg = msg.c_str();
-      Serial.println(msg);
-      DeserializationError error = deserializeJson(incomingLive, charMsg);
-      if (error)
+      if (Firebase.getJSON(fbdo, historyPath.c_str(), query))
       {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.f_str());
+        String msg = fbdo.jsonString();
+        const char *charMsg = msg.c_str();
+        Serial.println(msg);
+        DeserializationError error = deserializeJson(incomingLive, charMsg);
+        if (error)
+        {
+          Serial.print(F("deserializeJson() failed: "));
+          Serial.println(error.f_str());
+        }
+        else
+        {
+          for (JsonPair keyValue : incomingLive.as<JsonObject>())
+          {
+            JsonObject value = keyValue.value();
+            todayUse = value["today"];
+            break; // Exit the loop after the first key-value pair.
+          }
+          for (int i = 0; i < 17; i++)
+          {
+            pixels.setPixelColor(i, pixels.Color(0, 0, 0));
+          }
+          for (int i = 17; i > (17 - int(todayUse * todayFactor)); i--)
+          {
+            pixels.setPixelColor(i, pixels.Color(232, 229, 88));
+            if (i == 0)
+            {
+              break;
+            }
+          }
+        }
+        pixels.show();
+        dailyLEDMillis = millis();
       }
       else
       {
-        for (JsonPair keyValue : incomingLive.as<JsonObject>())
-        {
-          JsonObject value = keyValue.value();
-          todayUse = value["yesterday"];
-          Serial.println(int(todayUse * todayFactor));
-          break; // Exit the loop after the first key-value pair.
-        }
-        for (int i = 17; i > (17 - int(todayUse * todayFactor)); i--)
-        {
-          pixels.setPixelColor(i, pixels.Color(232, 229, 88));
-          if (i == 0)
-          {
-            break;
-          }
-        }
+        // Failed to get JSON data at defined database path, print out the error reason
+        Serial.println(fbdo.errorReason());
       }
     }
-    else
-    {
-      // Failed to get JSON data at defined database path, print out the error reason
-      Serial.println(fbdo.errorReason());
-    }
-
-    pixels.show();
-    Serial.println("Test Passed");
-
-    // Clear all query parameters
-    query.clear();
   }
+
+  initialising = false;
 
   // Regularly check for MQTT connection
   mqttClient.loop();
@@ -526,4 +534,70 @@ bool refreshFirebase()
     Serial.print("Firebase Failed.");
     return false;
   }
+}
+
+void rainbowFade2White(int wait, int rainbowLoops, int whiteLoops)
+{
+  int fadeVal = 0, fadeMax = 100;
+
+  // Hue of first pixel runs 'rainbowLoops' complete loops through the color
+  // wheel. Color wheel has a range of 65536 but it's OK if we roll over, so
+  // just count from 0 to rainbowLoops*65536, using steps of 256 so we
+  // advance around the wheel at a decent clip.
+  for (uint32_t firstPixelHue = 0; firstPixelHue < rainbowLoops * 65536;
+       firstPixelHue += 256)
+  {
+
+    for (int i = 0; i < pixels.numPixels(); i++)
+    { // For each pixel in strip...
+
+      // Offset pixel hue by an amount to make one full revolution of the
+      // color wheel (range of 65536) along the length of the strip
+      // (strip.numPixels() steps):
+      uint32_t pixelHue = firstPixelHue + (i * 65536L / pixels.numPixels());
+
+      // strip.ColorHSV() can take 1 or 3 arguments: a hue (0 to 65535) or
+      // optionally add saturation and value (brightness) (each 0 to 255).
+      // Here we're using just the three-argument variant, though the
+      // second value (saturation) is a constant 255.
+      pixels.setPixelColor(i, pixels.gamma32(pixels.ColorHSV(pixelHue, 255,
+                                                             255 * fadeVal / fadeMax)));
+    }
+
+    pixels.show();
+    delay(wait);
+
+    if (firstPixelHue < 65536)
+    { // First loop,
+      if (fadeVal < fadeMax)
+        fadeVal++; // fade in
+    }
+    else if (firstPixelHue >= ((rainbowLoops - 1) * 65536))
+    { // Last loop,
+      if (fadeVal > 0)
+        fadeVal--; // fade out
+    }
+    else
+    {
+      fadeVal = fadeMax; // Interim loop, make sure fade is at max
+    }
+  }
+
+  for (int k = 0; k < whiteLoops; k++)
+  {
+    for (int j = 0; j < 256; j++)
+    { // Ramp up 0 to 255
+      // Fill entire strip with white at gamma-corrected brightness level 'j':
+      pixels.fill(pixels.Color(0, 0, 0, pixels.gamma8(j)));
+      pixels.show();
+    }
+    delay(1000); // Pause 1 second
+    for (int j = 255; j >= 0; j--)
+    { // Ramp down 255 to 0
+      pixels.fill(pixels.Color(0, 0, 0, pixels.gamma8(j)));
+      pixels.show();
+    }
+  }
+
+  delay(500); // Pause 1/2 second
 }
