@@ -89,16 +89,21 @@ unsigned long historyDataMillis = 0;
 unsigned long testMillis = 0;
 unsigned long liveLEDMillis = 0;
 unsigned long dailyLEDMillis = 0;
+unsigned long lastLEDMillis = 0;
 int deviceCount = 0;
-int led = LED_BUILTIN;
+int ledWait = 250;
+int liveLEDCount = 0;
+int lastLEDCount = 0;
+int liveLEDDefault = 19;
 std::map<String, DeviceData> deviceList;
 FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
 String defaultPath = "/TEST/";
 String liveOverallPath = defaultPath;
 bool initialising = true;
-int livePower = 0;
-int liveFactor = 15;
+bool liveLEDInitialising = true;
+unsigned int livePower = 0;
+unsigned int liveFactor = 15;
 float todayUse = 0;
 float todayFactor = 20;
 QueryFilter query;
@@ -221,7 +226,7 @@ void loop()
     // pixels.clear(); // Set all pixel colors to 'off'
     pixels.setPixelColor(18, pixels.Color(255, 0, 0));
     // Get live Data and set LED
-    if (millis() - liveLEDMillis > 60000 || initialising)
+    if (millis() - liveLEDMillis > 15000 || initialising)
     {
       if (Firebase.getJSON(fbdo, livePath.c_str(), query))
       {
@@ -241,22 +246,19 @@ void loop()
             JsonObject value = keyValue.value();
             livePower = value["power"];
             // assign random int value from 0 to 300 to livePower
-            // livePower = int(random(0, 300));
+            livePower = int(random(0, 300));
             Serial.print("Live Power: ");
             Serial.println(livePower);
             break; // Exit the loop after the first key-value pair.
           }
-          for (int i = 19; i < 40; i++)
-          {
-            pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-          }
-          // TODO: Calculate the number of LED to light up based on the average over time
-          for (int i = 19; i < 19 + (livePower / liveFactor); i++)
-          {
-            pixels.setPixelColor(i, pixels.Color(232, 229, 88));
-          }
+          liveLEDCount = (livePower / liveFactor);
+          // print liveLEDCount and lastLEDCount
+          Serial.print("liveLEDCount: ");
+          Serial.println(liveLEDCount);
+          Serial.print("lastLEDCount: ");
+          Serial.println(lastLEDCount);
         }
-        pixels.show(); // Send the updated pixel colors to the hardware.
+        // pixels.show(); // Send the updated pixel colors to the hardware.
         liveLEDMillis = millis();
       }
       else
@@ -264,6 +266,41 @@ void loop()
         // Failed to get JSON data at defined database path, print out the error reason
         Serial.println(fbdo.errorReason());
       }
+    }
+    // Set LED animation
+    if (millis() - lastLEDMillis > ledWait)
+    {
+      if (liveLEDInitialising)
+      {
+        pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
+        pixels.show();
+        lastLEDCount++;
+        if (lastLEDCount == liveLEDCount)
+        {
+          liveLEDInitialising = false;
+        }
+      }
+      else
+      {
+        if (liveLEDCount - lastLEDCount > 0)
+        {
+          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
+          pixels.show();
+          lastLEDCount++;
+        }
+        else if (liveLEDCount - lastLEDCount < 0)
+        {
+          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(0, 0, 0));
+          pixels.show();
+          lastLEDCount--;
+        }
+        else
+        {
+          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
+          pixels.show();
+        }
+      }
+      lastLEDMillis = millis();
     }
 
     // Get history data and set LED
