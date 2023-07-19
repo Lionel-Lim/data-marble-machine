@@ -3,11 +3,9 @@
 #if defined(ESP32)
 #include <WiFi.h>
 #include <FirebaseESP32.h>
-#include <ESP32WebServer.h>
 #elif defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <FirebaseESP8266.h>
-#include <ESP8266WebServer.h>
 #elif defined(ARDUINO_RASPBERRY_PI_PICO_W)
 #include <WiFi.h>
 #include <FirebaseESP8266.h>
@@ -20,6 +18,7 @@
 #include <addons/RTDBHelper.h>
 
 #include <DNSServer.h>
+#include <WebServer.h>
 #include <WiFiManager.h>
 
 // JSON Library
@@ -44,8 +43,7 @@
 #define MQTT_SERVER "mqtt.cetools.org"
 #define MQTT_TOPIC "UCL/OPS/107/EM/gosund/#"
 
-// Which pin on the Arduino is connected to the NeoPixels?
-#define PIN 14 // On Trinket or Gemma, suggest changing this to 1
+#define LED_PIN 13
 
 // How many NeoPixels are attached to the Arduino?
 #define NUMPIXELS 40 // Popular NeoPixel ring size
@@ -58,7 +56,7 @@
 /* This database secret required in this example to get the righs access to database rules */
 #define DATABASE_SECRET "DATABASE_SECRET"
 
-#define TOUCH_PIN 13
+#define TOUCH_PIN 12
 
 // Define Firebase objects
 FirebaseData fbdo;
@@ -70,7 +68,7 @@ DynamicJsonDocument incomingLive(256);
 DynamicJsonDocument MQTTincoming(512);
 
 // Define NeoPixel object
-Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Define WiFi client
 WiFiClient espClient;
@@ -148,7 +146,8 @@ void setup()
   {
     Serial.println("Failed to connect, we should reset as see if it connects");
     delay(3000);
-    ESP.reset();
+    // Reset device
+    ESP.restart();
     delay(5000);
   }
 
@@ -178,6 +177,7 @@ void setup()
   config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
 
   Firebase.begin(&config, &auth);
+  Serial.println(Firebase.ready() ? "Firebase is Ready." : "Firebase is Not ready.");
 
   Firebase.reconnectWiFi(true);
 
@@ -200,10 +200,8 @@ void setup()
     Serial.println("Could not find Motor Shield. Check wiring.");
     while (1)
       ;
-    Serial.println("Motor Shield found.");
   }
-
-  pinMode(TOUCH_PIN, INPUT); // set GPIO as input
+  Serial.println("Motor Shield found.");
 }
 
 void loop()
@@ -270,7 +268,7 @@ void loop()
             // TEST: assign random int value from 0 to 300 to livePower
             livePower = int(random(0, 300));
             // Run motor
-            myMotor->run(FORWARD);
+            // myMotor->run(FORWARD);
             Serial.print("Live Power: ");
             Serial.println(livePower);
             break; // Exit the loop after the first key-value pair.
@@ -326,7 +324,7 @@ void loop()
       }
       // Set motor speed
       int motorSpeed = int(map(lastLEDCount, 0, 20, 50, 150));
-      myMotor->setSpeed(motorSpeed);
+      // myMotor->setSpeed(motorSpeed);
 
       lastLEDMillis = millis();
     }
@@ -379,11 +377,10 @@ void loop()
 
   initialising = false;
 
-  touchValue = digitalRead(TOUCH_PIN);
   if (millis() - testMillis > 1000)
   {
     Serial.print("touch Value: ");
-    Serial.println(touchValue);
+    Serial.println(touchRead(TOUCH_PIN));
     testMillis = millis();
   }
 

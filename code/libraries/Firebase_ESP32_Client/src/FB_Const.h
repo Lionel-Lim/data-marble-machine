@@ -1,10 +1,10 @@
 #include "Firebase_Client_Version.h"
-#if !FIREBASE_CLIENT_VERSION_CHECK(40314)
+#if !FIREBASE_CLIENT_VERSION_CHECK(40316)
 #error "Mixed versions compilation."
 #endif
 
 /**
- * Created June 15, 2023
+ * Created July 11, 2023
  *
  * This work is a part of Firebase ESP Client library
  * Copyright (c) 2023 K. Suwatchai (Mobizt)
@@ -1894,7 +1894,6 @@ struct fb_esp_session_info_t
     bool streaming = false;
     bool buffer_ovf = false;
     bool chunked_encoding = false;
-    bool connected = false;
     bool classic_request = false;
     MB_String host;
     unsigned long last_conn_ms = 0;

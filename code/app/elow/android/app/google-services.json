@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1080577588331",
+    "firebase_url": "https://energycelab-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "energycelab",
+    "storage_bucket": "energycelab.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1080577588331:android:e390912d465a1f4239452e",
+        "android_client_info": {
+          "package_name": "com.example.elow"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1080577588331-1ftml9227sn1qpg3cnnonaorbo78lgkc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyClLk9jArf048MuDu87t0z2aqdEHITUJ-4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1080577588331-1ftml9227sn1qpg3cnnonaorbo78lgkc.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1080577588331-gruo9kp1gs041f3k0oh88imp26s24at0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.elow"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
