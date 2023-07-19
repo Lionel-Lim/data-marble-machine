@@ -48,13 +48,14 @@ class _LoginState extends State<Login> {
     throw Exception("login failed");
   }
 
-  void signup(
+  Future<UserCredential> signup(
       String name, String email, String password, BuildContext context) async {
     debugPrint("signup called");
     try {
       final credential = await widget.auth
           .createUserWithEmailAndPassword(email: email, password: password);
-      await credential.user!.updateDisplayName(name);
+      await credential.user?.updateDisplayName(name);
+      return credential;
     } on FirebaseAuthException catch (e) {
       final code = parseFirebaseAuthExceptionMessage(input: e.message);
       if (code == 'email-already-in-use') {
@@ -66,6 +67,7 @@ class _LoginState extends State<Login> {
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(code)));
     }
+    throw Exception("signup failed");
   }
 
   Widget inputs(bool isCreateAccount) {
@@ -94,6 +96,8 @@ class _LoginState extends State<Login> {
           child: TextField(
             controller: emailInputController,
             obscureText: false,
+            autofillHints: const [AutofillHints.email],
+            keyboardType: TextInputType.emailAddress,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
               labelText: 'Email',
@@ -107,8 +111,11 @@ class _LoginState extends State<Login> {
           width: 250,
           height: 50,
           child: TextField(
+            textInputAction: TextInputAction.next,
             controller: passwordInputController,
             obscureText: true,
+            autofillHints: const [AutofillHints.password],
+            keyboardType: TextInputType.visiblePassword,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
               labelText: 'Password',
@@ -137,24 +144,33 @@ class _LoginState extends State<Login> {
                 width: 250,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: () => {
+                  onPressed: () async {
                     if (nameInputController.text == "" ||
                         emailInputController.text == "" ||
-                        passwordInputController.text == "")
-                      {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text("Please fill in all fields")))
+                        passwordInputController.text == "") {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Please fill in all fields"),
+                        ),
+                      );
+                    } else {
+                      final UserCredential credential = await signup(
+                          nameInputController.text,
+                          emailInputController.text,
+                          passwordInputController.text,
+                          context);
+                      if (context.mounted) {
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                Dashboard(credential: credential),
+                          ),
+                          (route) => false,
+                        );
                       }
-                    else
-                      {
-                        signup(
-                            nameInputController.text,
-                            emailInputController.text,
-                            passwordInputController.text,
-                            context)
-                      },
-                    print("Sign up button pressed")
+                    }
+                    debugPrint("Sign up button pressed");
                   },
                   child: const Text('Sign Up'),
                 ),
