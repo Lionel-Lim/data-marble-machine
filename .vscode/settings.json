@@ -1,3 +1,7 @@
 {
-  "cmake.sourceDirectory": "/Users/dylim/Documents/CASA/CE/data-marble-machine/code/hardware/espressif/esp32"
+  "cmake.sourceDirectory": "/Users/dylim/Documents/CASA/CE/data-marble-machine/code/hardware/espressif/esp32",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "python.formatting.provider": "none"
 }

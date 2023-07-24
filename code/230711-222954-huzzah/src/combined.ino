@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #if defined(ESP32)
 #include <WiFi.h>
-#include <FirebaseESP32.h>
+#include <Firebase_ESP_Client.h>
 #elif defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <FirebaseESP8266.h>
@@ -248,7 +248,7 @@ void loop()
     // Get live Data and set LED
     if (millis() - liveLEDMillis > 15000 || initialising)
     {
-      if (Firebase.getJSON(fbdo, livePath.c_str(), query))
+      if (Firebase.RTDB.getJSON(&fbdo, livePath.c_str(), &query))
       {
         String msg = fbdo.jsonString();
         const char *charMsg = msg.c_str();
@@ -332,7 +332,7 @@ void loop()
     // Get history data and set LED
     if (millis() - dailyLEDMillis > 600000 || initialising)
     {
-      if (Firebase.getJSON(fbdo, historyPath.c_str(), query))
+      if (Firebase.RTDB.getJSON(&fbdo, historyPath.c_str(), &query))
       {
         String msg = fbdo.jsonString();
         const char *charMsg = msg.c_str();
@@ -453,7 +453,7 @@ void callback(char *topic, byte *payload, unsigned int length)
     liveOverallJson.set("time", data.time);
     historyOverallJson.set("time", data.time);
 
-    if (Firebase.pushJSON(fbdo, livePath, liveJson))
+    if (Firebase.RTDB.pushJSON(&fbdo, livePath, &liveJson))
     {
       Serial.printf("Push data... %s\n", "ok");
     }
@@ -535,7 +535,7 @@ String updateOverallLive()
   liveOverallJson.set("devices", deviceCount);
   liveOverallJson.set("power", sumPower());
 
-  if (Firebase.pushJSON(fbdo, liveOverallPath, liveOverallJson))
+  if (Firebase.RTDB.pushJSON(&fbdo, liveOverallPath, &liveOverallJson))
   {
     return "Overall Data:Success";
   }
@@ -565,7 +565,7 @@ String updateHistory()
     historyJson.set("yesterday", pair.second.yesterday);
     historyJson.set("startDate", pair.second.startDate);
 
-    if (Firebase.pushJSON(fbdo, historyPath, historyJson))
+    if (Firebase.RTDB.pushJSON(&fbdo, historyPath, &historyJson))
     {
       result += "Success///";
     }
@@ -578,7 +578,7 @@ String updateHistory()
   historyOverallJson.set("total", sumTotalUse());
   historyOverallJson.set("today", sumTodayUse());
   historyOverallJson.set("yesterday", sumYesterdayUse());
-  if (Firebase.pushJSON(fbdo, historyOverallPath, historyOverallJson))
+  if (Firebase.RTDB.pushJSON(&fbdo, historyOverallPath, &historyOverallJson))
   {
     result += "Success///";
   }
