@@ -38,6 +38,9 @@
 
 #include <map>
 
+// Time Library
+#include "time.h"
+
 // MQTT Server address
 // TODO: Change this address dynamically in App or Web
 #define MQTT_SERVER "mqtt.cetools.org"
@@ -48,13 +51,7 @@
 // How many NeoPixels are attached to the Arduino?
 #define NUMPIXELS 40 // Popular NeoPixel ring size
 
-// Define the RTDB URL
-#define DATABASE_URL "https://energycelab-default-rtdb.europe-west1.firebasedatabase.app"
-
-#define LIVEOVERALL "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/Live/overall"
-
-/* This database secret required in this example to get the righs access to database rules */
-#define DATABASE_SECRET "DATABASE_SECRET"
+#define PROJECT_ID "energycelab"
 
 #define TOUCH_PIN 12
 
@@ -107,8 +104,8 @@ int touchValue = 0;
 std::map<String, DeviceData> deviceList;
 FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
-String defaultPath = "/TEST/";
-String liveOverallPath = defaultPath;
+String defaultPath = "device/";
+String userUID;
 bool initialising = true;
 bool liveLEDInitialising = true;
 unsigned int livePower = 0;
@@ -119,6 +116,11 @@ QueryFilter query;
 // TODO: Change the path dynamically in App or Web
 String livePath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/Live/overall";
 String historyPath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/History/Overall";
+
+// Time Library Parameters
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 0;
 
 void setup()
 {
@@ -170,25 +172,27 @@ void setup()
   auth.user.email = TEST_EMAIL;
   auth.user.password = TEST_PASSWORD;
 
-  /* Assign the RTDB URL (required) */
-  config.database_url = DATABASE_URL;
-
   /* Assign the callback function for the long running token generation task */
   config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
+
+  // Limit the size of response payload to be collected in FirebaseData
+  fbdo.setResponseSize(2048);
 
   Firebase.begin(&config, &auth);
   Serial.println(Firebase.ready() ? "Firebase is Ready." : "Firebase is Not ready.");
 
   Firebase.reconnectWiFi(true);
 
+  // Save the user UID
+  userUID = auth.token.uid.c_str();
+  // Update the default path
+  defaultPath += userUID;
+  defaultPath += "/";
+
   // Set MQTT Server
   mqttClient.setServer(MQTT_SERVER, 1883);
   mqttClient.setCallback(callback);
   mqttClient.setBufferSize(512);
-
-  // Set paths for Firebase
-  liveOverallPath += auth.token.uid.c_str();
-  liveOverallPath += "/UCL/OPS/107/EM/Live/overall";
 
   // Set query for Firebase
   query.orderBy("$key");
@@ -202,6 +206,11 @@ void setup()
       ;
   }
   Serial.println("Motor Shield found.");
+
+  // init and get the time
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  Serial.println(getCurrentTime());
 }
 
 void loop()
@@ -241,7 +250,8 @@ void loop()
   }
 
   // Set NeoPixel color based on live data
-  if (Firebase.ready())
+  if (false)
+  // if (Firebase.ready())
   {
     // pixels.clear(); // Set all pixel colors to 'off'
     pixels.setPixelColor(18, pixels.Color(255, 0, 0));
@@ -377,12 +387,13 @@ void loop()
 
   initialising = false;
 
-  if (millis() - testMillis > 1000)
-  {
-    Serial.print("touch Value: ");
-    Serial.println(touchRead(TOUCH_PIN));
-    testMillis = millis();
-  }
+  // Read touch sensor value
+  // if (millis() - testMillis > 1000)
+  // {
+  //   Serial.print("touch Value: ");
+  //   Serial.println(touchRead(TOUCH_PIN));
+  //   testMillis = millis();
+  // }
 
   // Regularly check for MQTT connection
   mqttClient.loop();
@@ -434,6 +445,7 @@ void callback(char *topic, byte *payload, unsigned int length)
     }
     data.time = String(MQTTincoming["Time"].as<const char *>());
     data.startDate = String(MQTTincoming["ENERGY"]["TotalStartTime"].as<const char *>());
+    data.startDate += "Z"; // For ZULU format
     data.total = MQTTincoming["ENERGY"]["Total"];
     data.today = MQTTincoming["ENERGY"]["Today"];
     data.yesterday = MQTTincoming["ENERGY"]["Yesterday"];
@@ -441,29 +453,53 @@ void callback(char *topic, byte *payload, unsigned int length)
 
     deviceList[deviceName] = data;
 
-    String livePath = defaultPath;
-    livePath += auth.token.uid.c_str();
-    livePath += "/UCL/OPS/107/EM/Live/";
-    livePath += deviceName;
-
     FirebaseJson liveJson;
-    liveJson.set("time", data.time);
-    liveJson.set("power", data.power);
+    String sensorLocation = "UCL/OPS/107";
+    String sensorType = "EM";
+    int livePower = data.power;
+    String currentTime = getCurrentTime();
+    String documentPath = defaultPath;
 
-    liveOverallJson.set("time", data.time);
-    historyOverallJson.set("time", data.time);
+    liveJson.set("fields/lastUpdated/timestampValue", currentTime);
 
-    if (Firebase.RTDB.pushJSON(&fbdo, livePath, &liveJson))
+    /* Send the live data to Firestore
+    Structure: device/{userUID}/sensors/{deviceName}/live/{autogeratedID}
+    */
+    if (Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), liveJson.raw(), "lastUpdated"))
     {
-      Serial.printf("Push data... %s\n", "ok");
+      documentPath += "sensors/";
+      documentPath += deviceName;
+      documentPath += "/";
+      liveJson.clear();
+      liveJson.set("fields/location/stringValue", sensorLocation);
+      liveJson.set("fields/type/stringValue", sensorType);
+      if (Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), liveJson.raw(), "location,type"))
+      {
+        documentPath += "live/";
+        Serial.println(documentPath);
+        liveJson.clear();
+        liveJson.set("fields/power/integerValue", livePower);
+        liveJson.set("fields/time/timestampValue", currentTime);
+        if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), liveJson.raw()))
+        {
+          // Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+          // print success message and time
+          Serial.printf("Live Data: Success at %s\n", currentTime.c_str());
+        }
+        else
+        {
+          Serial.println(fbdo.errorReason());
+        }
+      }
+      else
+      {
+        Serial.println(fbdo.errorReason());
+      }
     }
     else
     {
-      Serial.printf("Error: \n%s", fbdo.errorReason().c_str());
-      refreshFirebase();
+      Serial.println(fbdo.errorReason());
     }
-
-    // Serial.printf("Push data... %s\n", Firebase.pushJSON(fbdo, livePath, liveJson) ? "ok" : fbdo.errorReason().c_str());
   }
 }
 
@@ -472,7 +508,7 @@ void reconnect()
   while (!mqttClient.connected())
   {
     Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect("DY_Device"))
+    if (mqttClient.connect("DY_Device_Test"))
     {
       Serial.println("connected");
       Serial.print("Subscription is...");
@@ -530,63 +566,113 @@ float sumYesterdayUse()
   return YesterdayUse;
 }
 
+/* Send the live overall data to Firestore
+    Structure: device/{userUID}/sensors/overall/live/{autoGeneratedID}
+*/
 String updateOverallLive()
 {
-  liveOverallJson.set("devices", deviceCount);
-  liveOverallJson.set("power", sumPower());
-
-  if (Firebase.RTDB.pushJSON(&fbdo, liveOverallPath, &liveOverallJson))
+  String result = "Live Overall Data:";
+  String currentTime = getCurrentTime();
+  String liveOverallPath = defaultPath;
+  liveOverallPath += "sensors/overall";
+  Serial.printf("liveOverallPath: %s\n", liveOverallPath.c_str());
+  // Check overall document exists, if not create one
+  if (!Firebase.Firestore.getDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str()))
   {
-    return "Overall Data:Success";
+    FirebaseJson overallInitJson;
+    overallInitJson.set("fields/created/timestampValue", currentTime);
+    Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str(), overallInitJson.raw());
   }
   else
   {
-    return fbdo.errorReason().c_str();
+    Serial.print("Overall document exists failed: ");
+    Serial.println(fbdo.payload());
+  }
+
+  liveOverallPath += "/live/";
+  liveOverallJson.set("fields/time/timestampValue", currentTime);
+  liveOverallJson.set("fields/devices/integerValue", deviceCount);
+  liveOverallJson.set("fields/power/integerValue", sumPower());
+
+  if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str(), liveOverallJson.raw()))
+  {
+    // Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+    result += "Success at";
+    result += currentTime;
+    return result;
+  }
+  else
+  {
+    return fbdo.errorReason();
   }
 }
 
+/* Send the live overall data to Firestore
+    Structure: device/{userUID}/sensors/{deviceName}/history/{autoGeneratedID}
+    Structure: device/{userUID}/sensors/overall/history/{autoGeneratedID}
+*/
 String updateHistory()
 {
   String result = "History Data:";
-  String historyOverallPath;
+  String currentTime = getCurrentTime();
+
+  // Update history data for each device to Firestore
   for (auto const &pair : deviceList)
   {
     String historyPath = defaultPath;
-    historyPath += auth.token.uid.c_str();
-    historyPath += "/UCL/OPS/107/EM/History/";
-    historyOverallPath = historyPath;
-    historyOverallPath += "Overall";
+    historyPath += "sensors/";
     historyPath += pair.first;
+    historyPath += "/history/";
 
     FirebaseJson historyJson;
-    historyJson.set("time", pair.second.time);
-    historyJson.set("total", pair.second.total);
-    historyJson.set("today", pair.second.today);
-    historyJson.set("yesterday", pair.second.yesterday);
-    historyJson.set("startDate", pair.second.startDate);
+    historyJson.set("fields/time/timestampValue", currentTime);
+    historyJson.set("fields/total/doubleValue", pair.second.total);
+    historyJson.set("fields/today/doubleValue", pair.second.today);
+    historyJson.set("fields/yesterday/doubleValue", pair.second.yesterday);
+    historyJson.set("fields/startDate/timestampValue", pair.second.startDate);
 
-    if (Firebase.RTDB.pushJSON(&fbdo, historyPath, &historyJson))
+    if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", historyPath.c_str(), historyJson.raw()))
     {
-      result += "Success///";
+      result += pair.first;
+      result += ",";
+      result += "Success at";
+      result += currentTime;
     }
     else
     {
-      result += fbdo.errorReason().c_str();
-      result += "///";
+      result += "\n";
+      result += pair.first;
+      result += " Error:";
+      result += fbdo.errorReason();
+      result += "\n";
     }
   }
-  historyOverallJson.set("total", sumTotalUse());
-  historyOverallJson.set("today", sumTodayUse());
-  historyOverallJson.set("yesterday", sumYesterdayUse());
-  if (Firebase.RTDB.pushJSON(&fbdo, historyOverallPath, &historyOverallJson))
+
+  // Update overall history data to Firestore
+  String historyOverallPath = defaultPath;
+  historyOverallPath += "sensors/overall/history/";
+
+  historyOverallJson.set("fields/total/doubleValue", sumTotalUse());
+  historyOverallJson.set("fields/today/doubleValue", sumTodayUse());
+  historyOverallJson.set("fields/yesterday/doubleValue", sumYesterdayUse());
+
+  if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", historyOverallPath.c_str(), historyOverallJson.raw()))
   {
-    result += "Success///";
+    result += "\n";
+    result += "History Overall Success at";
+    result += currentTime;
   }
   else
   {
-    result += fbdo.errorReason().c_str();
+    result += "\n";
+    result += "History Overall Failed at";
+    result += currentTime;
+    result += "\nError:";
+    result += fbdo.errorReason();
+    result += "\n";
   }
 
+  // Return result message
   return result;
 }
 
@@ -670,4 +756,31 @@ void rainbowFade2White(int wait, int rainbowLoops, int whiteLoops)
   }
 
   delay(500); // Pause 1/2 second
+}
+
+String getCurrentTime()
+{
+  time_t now;
+  struct tm *timeinfo;
+  char buffer[80];
+
+  while (true)
+  {
+    time(&now);              // get the current time
+    timeinfo = gmtime(&now); // convert the time to GMT (aka Zulu time)
+
+    // If the year is not 1970, then we have a valid time
+    if (timeinfo->tm_year != 70)
+    {
+      break;
+    }
+    Serial.println("Waiting for time to be set...");
+
+    delay(1000); // Wait for a second before trying again
+  }
+
+  // Format the timeinfo struct into a string with the ISO 8601 / RFC 3339 format (Zulu Time)
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+
+  return String(buffer);
 }
