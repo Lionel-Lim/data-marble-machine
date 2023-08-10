@@ -194,13 +194,11 @@ class _LoginState extends State<Login> {
                             passwordInputController.text,
                             context);
                         if (context.mounted) {
-                          Navigator.pushAndRemoveUntil(
+                          Navigator.pushNamedAndRemoveUntil(
                             context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  Dashboard(credential: credential),
-                            ),
+                            '/main',
                             (route) => false,
+                            arguments: credential,
                           );
                         }
                       }
@@ -269,6 +267,27 @@ class _LoginState extends State<Login> {
                         ),
                       ],
                     ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text("Exhibition guest?"),
+                        TextButton(
+                          child: const Text("Login with test account"),
+                          onPressed: () async {
+                            final UserCredential credential = await login(
+                                "test@dylim.dev", "123456", context);
+                            if (context.mounted) {
+                              Navigator.pushNamedAndRemoveUntil(
+                                context,
+                                '/main',
+                                (route) => false,
+                                arguments: credential,
+                              );
+                            }
+                          },
+                        ),
+                      ],
+                    )
                   ],
                 ),
               ),

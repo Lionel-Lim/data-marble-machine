@@ -1,7 +1,0 @@
-// Only authenticated users can access/write data
-{
- "rules": {
- ".read": "auth != null && auth.token.email.endsWith('@dylim.dev')",
- ".write": "auth != null && auth.token.email.endsWith('@dylim.dev')"
- }
-}

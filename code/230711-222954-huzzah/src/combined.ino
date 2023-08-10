@@ -152,6 +152,50 @@ const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 0;
 const int daylightOffset_sec = 0;
 
+bool getUserPreference(bool refresh = false)
+{
+  FirebaseJson preferenceJSON;
+  Firebase.Firestore.getDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str());
+  FirebaseJson json;
+  FirebaseJsonData result;
+  json.setJsonData(fbdo.payload());
+  if (!json.get(result, "fields/preference") || refresh == false)
+  {
+    Serial.println("User preference not found. Creating new preference.");
+    preferenceJSON.set("fields/preference/mapValue/fields/unitCost/doubleValue", unitEnergyCost);
+    preferenceJSON.set("fields/preference/mapValue/fields/targetCost/integerValue", targetCost);
+    preferenceJSON.set("fields/preference/mapValue/fields/isLEDOn/booleanValue", isLEDOn);
+    preferenceJSON.set("fields/preference/mapValue/fields/isForceStop/booleanValue", isDebug);
+
+    Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str(), preferenceJSON.raw(), "preference");
+    return true;
+  }
+  else
+  {
+    Serial.println("User preference found.");
+    json.setJsonData(fbdo.payload());
+    if (json.get(result, "fields/preference/mapValue/fields/unitCost/doubleValue"))
+    {
+      unitEnergyCost = result.to<double>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/targetCost/integerValue"))
+    {
+      targetCost = result.to<int>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/isLEDOn/booleanValue"))
+    {
+      isLEDOn = result.to<bool>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/isForceStop/booleanValue"))
+    {
+      isDebug = result.to<bool>();
+    }
+    return true;
+  }
+
+  return false;
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -244,46 +288,7 @@ void setup()
   // Touch sensor
   pinMode(33, INPUT_PULLUP);
 
-  // Check user in the database if not create userprefernece document in Firebase
-  FirebaseJson preferenceJSON;
-  Firebase.Firestore.getDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str());
-  FirebaseJson json;
-  FirebaseJsonData result;
-  json.setJsonData(fbdo.payload());
-  if (!json.get(result, "fields/preference"))
-  {
-    Serial.println("User preference not found. Creating new preference.");
-
-    preferenceJSON.set("fields/preference/mapValue/fields/unitCost/doubleValue", unitEnergyCost);
-    preferenceJSON.set("fields/preference/mapValue/fields/targetCost/integerValue", targetCost);
-    preferenceJSON.set("fields/preference/mapValue/fields/isLEDOn/booleanValue", isLEDOn);
-    preferenceJSON.set("fields/preference/mapValue/fields/isForceStop/booleanValue", isDebug);
-
-    Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str(), preferenceJSON.raw(), "preference");
-  }
-  else
-  {
-    Serial.println("User preference found.");
-    json.setJsonData(fbdo.payload());
-    if (json.get(result, "fields/preference/mapValue/fields/unitCost/doubleValue"))
-    {
-      unitEnergyCost = result.to<double>();
-    }
-    if (json.get(result, "fields/preference/mapValue/fields/targetCost/integerValue"))
-    {
-      targetCost = result.to<int>();
-    }
-    if (json.get(result, "fields/preference/mapValue/fields/isLEDOn/booleanValue"))
-    {
-      isLEDOn = result.to<bool>();
-    }
-    if (json.get(result, "fields/preference/mapValue/fields/isForceStop/booleanValue"))
-    {
-      isDebug = result.to<bool>();
-    }
-  }
-
-  pixels.rainbow(5);
+  getUserPreference(false);
 }
 
 void loop()
@@ -326,7 +331,7 @@ void loop()
   else
   {
     ////////////////////////////////
-    // MQTT Client
+    // Connect MQTT Client
     ////////////////////////////////
     if (!mqttClient.connected())
     {
@@ -358,6 +363,9 @@ void loop()
 
       // Check marble saving
       saveMarbleRequired = checkMarbleSaving();
+
+      // Refresh User Preference
+      getUserPreference(true);
 
       liveDataMillis = millis();
     }
@@ -403,6 +411,10 @@ void loop()
         {
           Serial.println("No query result");
         }
+
+        // Set LED attribute
+        liveLEDCount = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 0, maxLiveLED));
+        motorSpeed = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 20, 50));
       }
     }
 
@@ -411,10 +423,6 @@ void loop()
     ////////////////////////////////
     if (!saveMarbleRequired && isLEDOn)
     {
-      // Set LED attribute
-      liveLEDCount = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 0, maxLiveLED));
-      Serial.printf("liveLEDCount: %d\n", liveLEDCount);
-
       // Show LED animation
       if (millis() - lastTransitionMillis > transitionWait)
       {
@@ -449,19 +457,6 @@ void loop()
             pixels.show();
           }
         }
-
-        // // Set motor speed
-        // int newMotorSpeed = int(mapValue(lastLEDCount, 0, maxLiveLED, 20, 50));
-        // // int newMotorSpeed = int(map(lastLEDCount, 0, maxLiveLED, 20, 50));
-        // if (newMotorSpeed != motorSpeed)
-        // {
-        //   motorSpeed = newMotorSpeed;
-        //   myMotor->setSpeed(motorSpeed);
-        //   Serial.print("Motor Speed: ");
-        //   Serial.println(motorSpeed);
-        // }
-
-        // lastTransitionMillis = millis();
       }
 
       // Get history data and set LED
@@ -513,15 +508,8 @@ void loop()
     ////////////////////////////////
     if (true && !saveMarbleRequired)
     {
-      if (millis() - lastTransitionMillis > transitionWait)
-      {
-        myMotor->run(FORWARD);
-        // Set motor speed
-        motorSpeed = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 20, 50));
-        myMotor->setSpeed(motorSpeed);
-        Serial.print("Motor Speed: ");
-        Serial.println(motorSpeed);
-      }
+      myMotor->run(FORWARD);
+      myMotor->setSpeed(motorSpeed);
     }
 
     ////////////////////////////////

@@ -1,4 +1,5 @@
 import 'package:elow/screen/dashboard.dart';
+import 'package:elow/screen/login.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
@@ -22,8 +23,8 @@ Future<void> main() async {
   //
   //Remove the line below when you are ready to test with a real user.
   //
-  tempCredential = await auth.signInWithEmailAndPassword(
-      email: "test@test.com", password: "123456");
+  // tempCredential = await auth.signInWithEmailAndPassword(
+  //     email: "test@dylim.dev", password: "123456");
 
   runApp(const MyApp());
 }
@@ -45,7 +46,22 @@ class MyApp extends StatelessWidget {
       //
       //Remove the line below when you are ready to test with a real user.
       //
-      home: Dashboard(credential: tempCredential),
+      // home: Dashboard(credential: tempCredential),
+      initialRoute: '/login',
+      onGenerateRoute: (RouteSettings settings) {
+        switch (settings.name) {
+          case '/login':
+            FirebaseAuth auth = FirebaseAuth.instance;
+            return MaterialPageRoute(builder: (context) => Login(auth: auth));
+          case '/main':
+            final UserCredential credential =
+                settings.arguments as UserCredential;
+            return MaterialPageRoute(
+                builder: (context) => Dashboard(credential: credential));
+          default:
+            return null; // Throw an error page or handle unknown routes
+        }
+      },
     );
   }
 }

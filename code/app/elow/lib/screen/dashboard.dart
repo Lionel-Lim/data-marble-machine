@@ -38,8 +38,10 @@ class _DashboardState extends State<Dashboard>
   String status = "Off";
   late StreamSubscription stream;
   List<_chartData> liveHistory = [];
+  List<_chartData> dailyHistory = [];
   bool isRefreshing = true;
-  final List<bool> _selectedFruits = <bool>[true, false];
+  final List<bool> _selectedMenu = <bool>[true, false];
+  int _selectedMenuIndex = 0;
 
   FirebaseAuth auth = FirebaseAuth.instance;
 
@@ -94,14 +96,23 @@ class _DashboardState extends State<Dashboard>
       series: <LineSeries<_chartData, DateTime>>[
         LineSeries<_chartData, DateTime>(
           dataSource: data, // Use the data passed to the function
-          xValueMapper: (_chartData sales, _) => sales.x,
-          yValueMapper: (_chartData sales, _) => sales.y,
+          xValueMapper: (_chartData data, _) => data.x,
+          yValueMapper: (_chartData data, _) => data.y,
           markerSettings: const MarkerSettings(
             isVisible: true,
           ),
         ),
       ],
     );
+  }
+
+  Future<List<_chartData>> getLiveHistory() async {
+    if (isRefreshing == true) {
+      liveHistory = await _getLiveHistory();
+      return liveHistory;
+    } else {
+      return liveHistory;
+    }
   }
 
   Future<List<_chartData>> _getLiveHistory() async {
@@ -129,13 +140,41 @@ class _DashboardState extends State<Dashboard>
     return liveHistory;
   }
 
-  Future<List<_chartData>> getLiveHistory() async {
+  Future<List<_chartData>> getDailyHistory() async {
     if (isRefreshing == true) {
-      liveHistory = await _getLiveHistory();
-      return liveHistory;
+      dailyHistory = await _getDailyHistory();
+      return dailyHistory;
     } else {
-      return liveHistory;
+      return dailyHistory;
     }
+  }
+
+  Future<List<_chartData>> _getDailyHistory() async {
+    List<_chartData> tempDailyHistory = [];
+    await FirebaseFirestore.instance
+        .collection("device/$_uid/sensors/overall/history/")
+        .where("time",
+            isGreaterThanOrEqualTo:
+                DateTime.now().subtract(const Duration(days: 1)))
+        .orderBy("time", descending: true)
+        .limit(10)
+        .get()
+        .then((snapshot) {
+      final docs = snapshot.docs;
+      if (docs.isNotEmpty) {
+        debugPrint("---------Daily--------");
+        for (var doc in docs) {
+          final data = doc.data();
+          Timestamp timestamp = data['time'];
+          DateTime dateTime = timestamp.toDate();
+          // debugPrint(data.toString());
+          // debugPrint(dateTime.toString());
+          tempDailyHistory.add(_chartData(dateTime, data['today']));
+        }
+        debugPrint("-------------------");
+      }
+    });
+    return tempDailyHistory;
   }
 
   double mapValue(double value, double fromLow, double fromHigh, double toLow,
@@ -148,8 +187,9 @@ class _DashboardState extends State<Dashboard>
   void initState() {
     super.initState();
 
-    // _uid = auth.currentUser!.uid;
-    _uid = "b0boEGdZJMYNdxMqi9tQ0UdEXMC3";
+    _uid = auth.currentUser!.uid;
+    // _uid = "b0boEGdZJMYNdxMqi9tQ0UdEXMC3";
+    // auth.currentUser!.updateDisplayName("Guest");
 
     maxLiveUse = getMaxDaily();
 
@@ -175,6 +215,7 @@ class _DashboardState extends State<Dashboard>
           final power = data['power'] as int;
           final timestamp = data['time'] as Timestamp;
           final dateTime = timestamp.toDate();
+          final currentTime = DateTime.now();
           if (power > maxLiveUse) {
             maxLiveUse = power;
           }
@@ -182,12 +223,19 @@ class _DashboardState extends State<Dashboard>
               mapValue(power.toDouble(), 0, maxLiveUse.toDouble(), 10, 1);
           setState(() {
             liveHistory.insert(0, _chartData(dateTime, newSpeed.toDouble()));
-            liveUse = power.toDouble();
-            setStatus(ReadingStatus.on);
+
+            // check currentTime - dateTime > 1 minute
+            if (currentTime.difference(dateTime).inMinutes > 1) {
+              setStatus(ReadingStatus.off);
+              liveUse = 0;
+            } else {
+              setStatus(ReadingStatus.on);
+              liveUse = power.toDouble();
+              _controller.duration = Duration(seconds: newSpeed.toInt());
+            }
           });
           debugPrint("maxLiveUse is $maxLiveUse");
           debugPrint("speed is $newSpeed");
-          _controller.duration = Duration(seconds: newSpeed.toInt());
 
           // And finally, restart the animation
           _controller.repeat();
@@ -293,19 +341,24 @@ class _DashboardState extends State<Dashboard>
                   ],
                 ),
               ),
-              AnimatedBuilder(
-                animation: _controller,
-                builder: (context, child) {
-                  return Transform.rotate(
-                    angle: _controller.value * 2.0 * 3.14159,
-                    child: child,
-                  );
-                },
-                child: Image(
-                  width: width / 3,
-                  image: const AssetImage("asset/images/cog.png"),
-                ),
-              ),
+              status == "Live"
+                  ? AnimatedBuilder(
+                      animation: _controller,
+                      builder: (context, child) {
+                        return Transform.rotate(
+                          angle: _controller.value * 2.0 * 3.14159,
+                          child: child,
+                        );
+                      },
+                      child: Image(
+                        width: width / 3,
+                        image: const AssetImage("asset/images/cog.png"),
+                      ),
+                    )
+                  : Image(
+                      width: width / 3,
+                      image: const AssetImage("asset/images/cog.png"),
+                    ),
               const SizedBox(
                 height: 20,
               ),
@@ -345,17 +398,22 @@ class _DashboardState extends State<Dashboard>
                 height: 60,
                 child: Center(
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       // DropdownButton(items: const [], onChanged: ),
                       ToggleButtons(
                         direction: Axis.horizontal,
                         onPressed: (int index) {
-                          setState(() {
-                            // The button that is tapped is set to true, and the others to false.
-                            for (int i = 0; i < _selectedFruits.length; i++) {
-                              _selectedFruits[i] = i == index;
-                            }
-                          });
+                          setState(
+                            () {
+                              // The button that is tapped is set to true, and the others to false.
+                              for (int i = 0; i < _selectedMenu.length; i++) {
+                                _selectedMenu[i] = i == index;
+                              }
+                              _selectedMenuIndex = _selectedMenu
+                                  .indexWhere((element) => element == true);
+                            },
+                          );
                         },
                         borderRadius:
                             const BorderRadius.all(Radius.circular(8)),
@@ -363,7 +421,7 @@ class _DashboardState extends State<Dashboard>
                           minHeight: 40.0,
                           minWidth: 80.0,
                         ),
-                        isSelected: _selectedFruits,
+                        isSelected: _selectedMenu,
                         children: fruits,
                       ),
                     ],
@@ -371,13 +429,15 @@ class _DashboardState extends State<Dashboard>
                 ),
               ),
               FutureBuilder(
-                future: getLiveHistory(),
+                future: _selectedMenuIndex == 0
+                    ? getLiveHistory()
+                    : getDailyHistory(),
                 builder: (context, snapshot) {
                   // debugPrint("Snapshot is $snapshot");
                   if (snapshot.connectionState == ConnectionState.done) {
                     if (snapshot.hasData) {
                       List<_chartData> data = snapshot.data as List<_chartData>;
-                      isRefreshing = false;
+                      // isRefreshing = false;
                       return graphTest(
                           data); // Pass the fetched data to graphTest()
                     } else {
