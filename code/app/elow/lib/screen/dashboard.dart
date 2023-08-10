@@ -1,7 +1,13 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
+import 'package:syncfusion_flutter_gauges/gauges.dart';
+
+enum ReadingStatus { on, off, error }
 
 class Dashboard extends StatefulWidget {
   final UserCredential credential;
@@ -11,20 +17,141 @@ class Dashboard extends StatefulWidget {
   State<Dashboard> createState() => _DashboardState();
 }
 
+class _chartData {
+  _chartData(this.x, this.y);
+  final DateTime x;
+  final double y;
+}
+
+const List<Widget> fruits = <Widget>[
+  Text('Live'),
+  Text('History'),
+];
+
 class _DashboardState extends State<Dashboard>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late Stream<QuerySnapshot> _docStream;
   late String _uid;
+  late int maxLiveUse;
+  double liveUse = 0;
+  String status = "Off";
+  late StreamSubscription stream;
+  List<_chartData> liveHistory = [];
+  bool isRefreshing = true;
+  final List<bool> _selectedFruits = <bool>[true, false];
 
   FirebaseAuth auth = FirebaseAuth.instance;
+
+  int getMaxDaily() {
+    int maxPower = 100;
+    FirebaseFirestore.instance
+        .collection('device/$_uid/sensors/overall/live/')
+        .orderBy("power", descending: true)
+        .limit(1)
+        .get()
+        .then(
+      (snapshot) {
+        final docs = snapshot.docs;
+        if (docs.isNotEmpty) {
+          // Assuming you want to listen to the first document changes, you can implement different logic if needed
+          final data = docs.first.data();
+          debugPrint("power is $data");
+          maxPower = data['power'] as int;
+        } else {
+          debugPrint("No data");
+        }
+      },
+    );
+    return maxPower;
+  }
+
+  void setStatus(ReadingStatus readingStatus) {
+    setState(() {
+      switch (readingStatus) {
+        case ReadingStatus.on:
+          status = "Live";
+          break;
+        case ReadingStatus.off:
+          status = "Off";
+          break;
+        case ReadingStatus.error:
+          status = "Error";
+          break;
+      }
+    });
+  }
+
+  Widget graphTest(List<_chartData> data) {
+    // debugPrint("Graph data is $data");
+    return SfCartesianChart(
+      primaryXAxis: DateTimeAxis(
+        // intervalType: DateTimeIntervalType.days,
+        // interval: 1,
+        dateFormat: DateFormat.d().add_jm(),
+        labelRotation: 45,
+      ),
+      series: <LineSeries<_chartData, DateTime>>[
+        LineSeries<_chartData, DateTime>(
+          dataSource: data, // Use the data passed to the function
+          xValueMapper: (_chartData sales, _) => sales.x,
+          yValueMapper: (_chartData sales, _) => sales.y,
+          markerSettings: const MarkerSettings(
+            isVisible: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<List<_chartData>> _getLiveHistory() async {
+    List<_chartData> liveHistory = [];
+    await FirebaseFirestore.instance
+        .collection("device/$_uid/sensors/overall/live/")
+        .orderBy("time", descending: true)
+        .limit(10)
+        .get()
+        .then((snapshot) {
+      final docs = snapshot.docs;
+      if (docs.isNotEmpty) {
+        debugPrint("-------------------");
+        for (var doc in docs) {
+          final data = doc.data();
+          Timestamp timestamp = data['time'];
+          DateTime dateTime = timestamp.toDate();
+          // debugPrint(data.toString());
+          // debugPrint(dateTime.toString());
+          liveHistory.add(_chartData(dateTime, data['power']));
+        }
+        debugPrint("-------------------");
+      }
+    });
+    return liveHistory;
+  }
+
+  Future<List<_chartData>> getLiveHistory() async {
+    if (isRefreshing == true) {
+      liveHistory = await _getLiveHistory();
+      return liveHistory;
+    } else {
+      return liveHistory;
+    }
+  }
+
+  double mapValue(double value, double fromLow, double fromHigh, double toLow,
+      double toHigh) {
+    return toLow +
+        ((value - fromLow) / (fromHigh - fromLow) * (toHigh - toLow));
+  }
 
   @override
   void initState() {
     super.initState();
 
     // _uid = auth.currentUser!.uid;
-    _uid = "UOkcczZbWlCvWeV5haM8";
+    _uid = "b0boEGdZJMYNdxMqi9tQ0UdEXMC3";
+
+    maxLiveUse = getMaxDaily();
 
     _controller = AnimationController(
       vsync: this, // the SingleTickerProviderStateMixin
@@ -32,31 +159,52 @@ class _DashboardState extends State<Dashboard>
     )..repeat();
 
     _docStream = FirebaseFirestore.instance
-        .collection('device/$_uid/test/overall/live/')
+        .collection('device/$_uid/sensors/overall/live/')
         .orderBy("time", descending: true)
         .snapshots();
 
     // Listen to changes
-    _docStream.listen((snapshot) {
-      final docs = snapshot.docs;
-      if (docs.isNotEmpty) {
-        print("Data updated!");
-        print("${docs.length}");
-        print("${docs.first.data()}");
-        // Assuming you want to listen to the first document changes, you can implement different logic if needed
-        final data = docs.first.data() as Map<String, dynamic>;
-        final newSpeed = data['power'] as int?;
-        if (newSpeed != null) {
-          // Then you can update the duration of your animation controller
-          _controller.duration = Duration(seconds: newSpeed);
+    stream = _docStream.listen(
+      (snapshot) {
+        final docs = snapshot.docs;
+        if (docs.isNotEmpty) {
+          print("Data updated!");
+          print("${docs.first.data()}");
+          // Assuming you want to listen to the first document changes, you can implement different logic if needed
+          final data = docs.first.data() as Map<String, dynamic>;
+          final power = data['power'] as int;
+          final timestamp = data['time'] as Timestamp;
+          final dateTime = timestamp.toDate();
+          if (power > maxLiveUse) {
+            maxLiveUse = power;
+          }
+          final newSpeed =
+              mapValue(power.toDouble(), 0, maxLiveUse.toDouble(), 10, 1);
+          setState(() {
+            liveHistory.insert(0, _chartData(dateTime, newSpeed.toDouble()));
+            liveUse = power.toDouble();
+            setStatus(ReadingStatus.on);
+          });
+          debugPrint("maxLiveUse is $maxLiveUse");
+          debugPrint("speed is $newSpeed");
+          _controller.duration = Duration(seconds: newSpeed.toInt());
 
           // And finally, restart the animation
           _controller.repeat();
+        } else {
+          debugPrint("No data");
         }
-      } else {
-        debugPrint("No data");
-      }
-    });
+      },
+    )
+      ..onDone(() {
+        debugPrint("Task Done");
+        setStatus(ReadingStatus.off);
+      })
+      ..onError((error) {
+        debugPrint("Error:");
+        debugPrint(error.toString());
+        setStatus(ReadingStatus.error);
+      });
   }
 
   @override
@@ -69,7 +217,6 @@ class _DashboardState extends State<Dashboard>
     // DatabaseController db = DatabaseController();
     // db.getStructure();
     // auth.signOut();
-
     return Scaffold(
       appBar: AppBar(
         title: SizedBox(
@@ -111,54 +258,139 @@ class _DashboardState extends State<Dashboard>
           ],
         ),
       ),
-      body: Center(
-        child: Column(
-          children: [
-            const SizedBox(
-              height: 20,
-            ),
-            SizedBox(
-              width: width,
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 20,
-                  ),
-                  const Text(
-                    "Live",
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w400,
+      body: SingleChildScrollView(
+        child: Center(
+          child: Column(
+            children: [
+              const SizedBox(
+                height: 20,
+              ),
+              SizedBox(
+                width: width,
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 20,
+                    ),
+                    Text(
+                      status,
+                      style: const TextStyle(
+                        fontSize: 40,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(
+                      width: 20,
+                    ),
+                    Text(
+                      formattedDate,
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w100,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedBuilder(
+                animation: _controller,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: _controller.value * 2.0 * 3.14159,
+                    child: child,
+                  );
+                },
+                child: Image(
+                  width: width / 3,
+                  image: const AssetImage("asset/images/cog.png"),
+                ),
+              ),
+              const SizedBox(
+                height: 20,
+              ),
+              SizedBox(
+                width: width / 3,
+                child: SfLinearGauge(
+                  minimum: 0,
+                  maximum: (((maxLiveUse + 99) / 100) * 100) + 1,
+                  barPointers: [
+                    LinearBarPointer(
+                      value: liveUse.toDouble(),
+                    ),
+                  ],
+                  axisTrackStyle: const LinearAxisTrackStyle(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.green,
+                        Colors.yellow,
+                        Colors.red,
+                      ],
                     ),
                   ),
-                  const SizedBox(
-                    width: 20,
-                  ),
-                  Text(
-                    formattedDate,
-                    style: const TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w100,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ],
+                  markerPointers: [
+                    LinearWidgetPointer(
+                      value: liveUse.toDouble(),
+                      position: LinearElementPosition.outside,
+                      child: Text("${liveUse.toDouble()}"),
+                    )
+                  ],
+                ),
               ),
-            ),
-            AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return Transform.rotate(
-                  angle: _controller.value * 2.0 * 3.14159,
-                  child: child,
-                );
-              },
-              child: const Image(
-                width: 150,
-                image: AssetImage("asset/images/cog.png"),
+              const SizedBox(
+                height: 20,
               ),
-            ),
-          ],
+              SizedBox(
+                width: width,
+                height: 60,
+                child: Center(
+                  child: Row(
+                    children: [
+                      // DropdownButton(items: const [], onChanged: ),
+                      ToggleButtons(
+                        direction: Axis.horizontal,
+                        onPressed: (int index) {
+                          setState(() {
+                            // The button that is tapped is set to true, and the others to false.
+                            for (int i = 0; i < _selectedFruits.length; i++) {
+                              _selectedFruits[i] = i == index;
+                            }
+                          });
+                        },
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(8)),
+                        constraints: const BoxConstraints(
+                          minHeight: 40.0,
+                          minWidth: 80.0,
+                        ),
+                        isSelected: _selectedFruits,
+                        children: fruits,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              FutureBuilder(
+                future: getLiveHistory(),
+                builder: (context, snapshot) {
+                  // debugPrint("Snapshot is $snapshot");
+                  if (snapshot.connectionState == ConnectionState.done) {
+                    if (snapshot.hasData) {
+                      List<_chartData> data = snapshot.data as List<_chartData>;
+                      isRefreshing = false;
+                      return graphTest(
+                          data); // Pass the fetched data to graphTest()
+                    } else {
+                      // Handle the case when there is no data
+                      return const Text('No data available');
+                    }
+                  } else {
+                    return const CircularProgressIndicator();
+                  }
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );

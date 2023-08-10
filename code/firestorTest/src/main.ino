@@ -10,8 +10,9 @@
  *
  */
 
-// This example shows how to create a document in a document collection. This operation required Email/password, custom or OAUth2.0 authentication.
+// This example shows how to run a query. This operation required Email/password, custom or OAUth2.0 authentication.
 
+#include "secrets.h"
 #include <Arduino.h>
 #if defined(ESP32) || defined(ARDUINO_RASPBERRY_PI_PICO_W)
 #include <WiFi.h>
@@ -24,21 +25,21 @@
 // Provide the token generation process info.
 #include <addons/TokenHelper.h>
 
-#include "time.h"
+#include <ArduinoJson.h>
 
 /* 1. Define the WiFi credentials */
-#define WIFI_SSID "09D4 Hyperoptic 1Gb Fibre 2.4Ghz"
-#define WIFI_PASSWORD "HHUkxtNFa9ex"
+#define WIFI_SSID _WIFI_SSID
+#define WIFI_PASSWORD _WIFI_PASSWORD
 
 /* 2. Define the API Key */
-#define API_KEY "AIzaSyDm1fOxs8Apj6yA0arBiTnAWIZ502dulqQ"
+#define API_KEY _API_KEY
 
 /* 3. Define the project ID */
 #define FIREBASE_PROJECT_ID "energycelab"
 
 /* 4. Define the user Email and password that alreadey registerd or added in your project */
-#define USER_EMAIL "test@test.com"
-#define USER_PASSWORD "123456"
+#define USER_EMAIL _USER_EMAIL
+#define USER_PASSWORD _USER_PASSWORD
 
 // Define Firebase Data object
 FirebaseData fbdo;
@@ -48,59 +49,17 @@ FirebaseConfig config;
 
 unsigned long dataMillis = 0;
 int count = 0;
-const char *ntpServer = "pool.ntp.org";
-String getTimeError = "Failed to obtain time";
+
+DynamicJsonDocument doc(2048);
 
 #if defined(ARDUINO_RASPBERRY_PI_PICO_W)
 WiFiMulti multi;
 #endif
 
-String getCurrentTime()
-{
-    time_t timeObj = Firebase.getCurrentTime();
-    struct tm *timeinfo;
-    char buffer[80];
-
-    timeinfo = gmtime(&timeObj);
-
-    // Format the timeinfo struct into a string with the ISO 8601 / RFC 3339 format (Zulu Time)
-    strftime(buffer, 80, "%Y-%m-%dT%H:%M:%SZ", timeinfo);
-
-    return String(buffer);
-}
-
-// The Firestore payload upload callback function
-void fcsUploadCallback(CFS_UploadStatusInfo info)
-{
-    if (info.status == fb_esp_cfs_upload_status_init)
-    {
-        Serial.printf("\nUploading data (%d)...\n", info.size);
-    }
-    else if (info.status == fb_esp_cfs_upload_status_upload)
-    {
-        Serial.printf("Uploaded %d%s\n", (int)info.progress, "%");
-    }
-    else if (info.status == fb_esp_cfs_upload_status_complete)
-    {
-        Serial.println("Upload completed ");
-    }
-    else if (info.status == fb_esp_cfs_upload_status_process_response)
-    {
-        Serial.print("Processing the response... ");
-    }
-    else if (info.status == fb_esp_cfs_upload_status_error)
-    {
-        Serial.printf("Upload failed, %s\n", info.errorMsg.c_str());
-    }
-}
-
 void setup()
 {
 
     Serial.begin(115200);
-
-    // Init and get the time
-    configTime(0, 0, ntpServer);
 
 #if defined(ARDUINO_RASPBERRY_PI_PICO_W)
     multi.addAP(WIFI_SSID, WIFI_PASSWORD);
@@ -127,7 +86,7 @@ void setup()
 
     Serial.printf("Firebase Client v%s\n\n", FIREBASE_CLIENT_VERSION);
 
-    /* Assign the api key (required) */
+    /* Assign the project host and api key (required) */
     config.api_key = API_KEY;
 
     /* Assign the user sign in credentials */
@@ -156,15 +115,9 @@ void setup()
 
     Firebase.reconnectWiFi(true);
 
-    // For sending payload callback
-    // config.cfs.upload_callback = fcsUploadCallback;
-
     // You can use TCP KeepAlive in FirebaseData object and tracking the server connection status, please read this for detail.
     // https://github.com/mobizt/Firebase-ESP-Client#about-firebasedata-object
     // fbdo.keepAlive(5, 5, 1);
-    Serial.print("Ready?...");
-    Serial.println(Firebase.authenticated() == true ? "Yes" : "No");
-    Serial.println(auth.token.uid.c_str());
 }
 
 void loop()
@@ -172,56 +125,79 @@ void loop()
 
     // Firebase.ready() should be called repeatedly to handle authentication tasks.
 
-    if (Firebase.ready() && (millis() - dataMillis > 30000 || dataMillis == 0))
+    if (Firebase.ready() && (millis() - dataMillis > 120000 || dataMillis == 0))
     {
         dataMillis = millis();
 
+        String path = "/device/b0boEGdZJMYNdxMqi9tQ0UdEXMC3/sensors/overall/";
+
+        Serial.print("Query a Firestore database... ");
+
+        // If you have run the CreateDocuments example, the document b0 (in collection a0) contains the document collection c0, and
+        // c0 contains the collections d?.
+
+        // The following query will query at collection c0 to get the 3 documents in the payload result with descending order.
+
         // For the usage of FirebaseJson, see examples/FirebaseJson/BasicUsage/Create_Edit_Parse/Create_Edit_Parse.ino
-        FirebaseJson content;
+        FirebaseJson query;
 
-        String sensorLocation = "UCL/OPS/107";
-        String sensorType = "EM";
-        int livePower = 30;
-        String currentTime = getCurrentTime();
-        String liveTime = currentTime;
+        query.set("select/fields/[0]/fieldPath", "power");
+        query.set("select/fields/[1]/fieldPath", "time");
 
-        // Note: If new document created under non-existent ancestor documents, that document will not appear in queries and snapshot
-        // https://cloud.google.com/firestore/docs/using-console#non-existent_ancestor_documents.
+        query.set("from/collectionId", "live");
+        query.set("from/allDescendants", false);
+        query.set("orderBy/field/fieldPath", "time");
+        query.set("orderBy/direction", "DESCENDING");
+        query.set("limit", 1);
 
-        // We will create the document in the parent path "a0/b?
-        // a0 is the collection id, b? is the document id in collection a0.
+        // The consistencyMode and consistency arguments are not assigned
+        // The consistencyMode is set to fb_esp_firestore_consistency_mode_undefined by default.
+        // The arguments is the consistencyMode value, see the function description at
+        // https://github.com/mobizt/Firebase-ESP-Client/tree/main/src#runs-a-query
 
-        String documentPath = "device/uid/";
-
-        content.set("fields/lastUpdated/timestampValue", currentTime);
-
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastUpdated"))
+        if (Firebase.Firestore.runQuery(&fbdo, FIREBASE_PROJECT_ID, "", path, &query))
         {
-            documentPath += "sensors/deviceName/";
-            content.clear();
-            content.set("fields/location/stringValue", sensorLocation);
-            content.set("fields/type/stringValue", sensorType);
-            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "location,type"))
+            Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+            DeserializationError error = deserializeJson(doc, fbdo.payload().c_str());
+
+            // Test if parsing succeeds.
+            if (error)
             {
-                documentPath += "live/";
-                Serial.println(documentPath);
-                content.clear();
-                content.set("fields/power/integerValue", livePower);
-                content.set("fields/time/timestampValue", liveTime);
-                if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw()))
-                {
-                    Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
-                }
-                else
-                {
-                    Serial.println(fbdo.errorReason());
-                }
+                Serial.print(F("deserializeJson() failed: "));
+                Serial.println(error.f_str());
+                return;
+            }
+            // Here's how you can access values in the document
+            JsonArray array = doc.as<JsonArray>();
+
+            // Check if there are any documents in the array
+            if (array.size() > 0)
+            {
+                JsonVariant v = array[0]; // Take the first document only
+
+                JsonObject document = v["document"];
+                String name = document["name"];
+                int power = document["fields"]["power"]["integerValue"].as<int>();
+                String timestampValue = document["fields"]["time"]["timestampValue"];
+                String createTime = document["createTime"];
+                String updateTime = document["updateTime"];
+                String readTime = v["readTime"];
+
+                // print values like name : value using printf
+                Serial.printf("name : %s\n", name.c_str());
+                Serial.printf("power : %d\n", power);
+                Serial.printf("timestampValue : %s\n", timestampValue.c_str());
+                Serial.printf("createTime : %s\n", createTime.c_str());
+                Serial.printf("updateTime : %s\n", updateTime.c_str());
+                Serial.printf("readTime : %s\n", readTime.c_str());
+                Serial.println();
             }
             else
             {
-                Serial.println(fbdo.errorReason());
+                Serial.println("No documents in array");
             }
         }
+
         else
         {
             Serial.println(fbdo.errorReason());

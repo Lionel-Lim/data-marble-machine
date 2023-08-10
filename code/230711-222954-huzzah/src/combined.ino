@@ -1,3 +1,4 @@
+#include <cmath>
 #include "secrets.h"
 #include <Arduino.h>
 #if defined(ESP32)
@@ -49,11 +50,15 @@
 #define LED_PIN 13
 
 // How many NeoPixels are attached to the Arduino?
-#define NUMPIXELS 40 // Popular NeoPixel ring size
+#define NUMPIXELS 40  // Popular NeoPixel ring size
+#define CENTRE_LED 19 // Centre LED index
 
 #define PROJECT_ID "energycelab"
 
-#define TOUCH_PIN 12
+#define TOUCH_PIN 27
+
+#define BUTTON1_PIN 15
+#define BUTTON2_PIN 14
 
 // Define Firebase objects
 FirebaseData fbdo;
@@ -63,6 +68,7 @@ FirebaseConfig config;
 // Define JSON size
 DynamicJsonDocument incomingLive(256);
 DynamicJsonDocument MQTTincoming(512);
+DynamicJsonDocument firestoreJSON(2048);
 
 // Define NeoPixel object
 Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -95,12 +101,26 @@ unsigned long testMillis = 0;
 unsigned long liveLEDMillis = 0;
 unsigned long dailyLEDMillis = 0;
 unsigned long lastLEDMillis = 0;
+unsigned long lastSaveAnimationLEDMillis = 0;
+unsigned long lastSaveMillis = 0;
+unsigned long Button1StateChangeTime = 0;
+unsigned long Button2StateChangeTime = 0;
+const unsigned long DebounceTime = 10;
+
 int deviceCount = 0;
 int ledWait = 250;
+int saveWait = 3400;
 int liveLEDCount = 0;
 int lastLEDCount = 0;
+int saveAnimationLastLEDCount = NUMPIXELS;
 int liveLEDDefault = 19;
-int touchValue = 0;
+int maximumLivePower = 300;
+int maxLiveLED = 19;
+int motorSpeed = 0;
+int savedMarble = 0;
+int targetMarble = 0;
+int maxMarble = 10;
+int isTouched = 0;
 std::map<String, DeviceData> deviceList;
 FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
@@ -108,11 +128,20 @@ String defaultPath = "device/";
 String userUID;
 bool initialising = true;
 bool liveLEDInitialising = true;
+bool saveAnimationInit = true;
+bool isDebug = false;
+bool debugInit = true;
+bool Button1Pressed = false;
+bool Button2Pressed = false;
+bool saveMarbleRequired = false;
+bool isSavingFinished = false;
 unsigned int livePower = 0;
 unsigned int liveFactor = 15;
 float todayUse = 0;
 float todayFactor = 20;
-QueryFilter query;
+// TODO: Read this from user preference
+double unitEnergyCost = 33.2;
+int targetCost = 50;
 // TODO: Change the path dynamically in App or Web
 String livePath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/Live/overall";
 String historyPath = "/Data/42grHfoBn4hpVYyNBhven4G4Sgk2/UCL/OPS/107/EM/History/Overall";
@@ -133,6 +162,9 @@ void setup()
   pixels.setBrightness(50);
   rainbowFade2White(5, 3, 3);
   pixels.clear(); // Set all pixel colors to 'off'
+
+  pinMode(BUTTON1_PIN, INPUT_PULLUP);
+  pinMode(BUTTON2_PIN, INPUT_PULLUP);
 
   WiFiManager wifiManager;
   // Uncomment to reset saved settings
@@ -194,10 +226,6 @@ void setup()
   mqttClient.setCallback(callback);
   mqttClient.setBufferSize(512);
 
-  // Set query for Firebase
-  query.orderBy("$key");
-  query.limitToLast(1);
-
   if (!AFMS.begin())
   { // create with the default frequency 1.6KHz
     // if (!AFMS.begin(1000)) {  // OR with a different frequency, say 1KHz
@@ -211,192 +239,295 @@ void setup()
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
   Serial.println(getCurrentTime());
+
+  // Touch sensor
+  pinMode(33, INPUT_PULLUP);
 }
 
 void loop()
 {
-  // MQTT Client
-  if (!mqttClient.connected())
+  checkButton1();
+  checkButton2();
+  if (isDebug)
   {
-    Serial.println("MQTT Client not connected");
-    reconnect();
-  }
-
-  // Check for inactive devices every minute and Update overall data
-  if (millis() - liveDataMillis > 60000)
-  {
-    for (auto it = deviceList.begin(); it != deviceList.end();)
+    if (debugInit)
     {
-      if (millis() - it->second.lastUpdated > 60000)
-      {                            // 60000 milliseconds = 1 minute
-        it = deviceList.erase(it); // remove the device from the list
-        deviceCount--;             // decrement the device count
-      }
-      else
-      {
-        ++it;
-      }
+      Serial.println("Button 1 is pressed : Debug Mode");
+      motorSpeed = 0;
+      debugInit = false;
     }
-    liveDataMillis = millis();
 
-    Serial.println(updateOverallLive());
-  }
+    mqttClient.disconnect();
+    // myMotor->run(FORWARD);
+    myMotor->run(BACKWARD);
+    myMotor->setSpeed(20);
 
-  // Update history data every 30 mins
-  if (millis() - historyDataMillis > 1800000)
-  {
-    historyDataMillis = millis();
-    Serial.println(updateHistory());
-  }
-
-  // Set NeoPixel color based on live data
-  if (false)
-  // if (Firebase.ready())
-  {
-    // pixels.clear(); // Set all pixel colors to 'off'
-    pixels.setPixelColor(18, pixels.Color(255, 0, 0));
-    // Get live Data and set LED
-    if (millis() - liveLEDMillis > 15000 || initialising)
+    // Read touch sensor value
+    // if (millis() - testMillis > 5)
+    // {
+    // int tempRead = touchRead(TOUCH_PIN);
+    // if (touchValue != tempRead)
+    // {
+    //   touchValue = tempRead;
+    //   Serial.print("touch Value: ");
+    //   Serial.println(touchValue);
+    // }
+    testMillis = millis();
+    int readdd = digitalRead(33);
+    if (readdd == LOW)
     {
-      if (Firebase.RTDB.getJSON(&fbdo, livePath.c_str(), &query))
+      savedMarble++;
+      Serial.printf("savedMarble: %d / targetMarble: %d\n", savedMarble, targetMarble);
+    }
+    // }
+  }
+  else
+  {
+    // MQTT Client
+    if (!mqttClient.connected())
+    {
+      Serial.println("MQTT Client not connected");
+      reconnect();
+    }
+
+    // Check for inactive devices every minute and Update overall data
+    if (millis() - liveDataMillis > 60000 && !saveMarbleRequired)
+    {
+      for (auto it = deviceList.begin(); it != deviceList.end();)
       {
-        String msg = fbdo.jsonString();
-        const char *charMsg = msg.c_str();
-        Serial.println(msg);
-        DeserializationError error = deserializeJson(incomingLive, charMsg);
-        if (error)
-        {
-          Serial.print(F("deserializeJson() failed: "));
-          Serial.println(error.f_str());
+        if (millis() - it->second.lastUpdated > 60000)
+        {                            // 60000 milliseconds = 1 minute
+          it = deviceList.erase(it); // remove the device from the list
+          deviceCount--;             // decrement the device count
         }
         else
         {
-          for (JsonPair keyValue : incomingLive.as<JsonObject>())
-          {
-            JsonObject value = keyValue.value();
-            livePower = value["power"];
-            // TEST: assign random int value from 0 to 300 to livePower
-            livePower = int(random(0, 300));
-            // Run motor
-            // myMotor->run(FORWARD);
-            Serial.print("Live Power: ");
-            Serial.println(livePower);
-            break; // Exit the loop after the first key-value pair.
-          }
-          liveLEDCount = (livePower / liveFactor);
-          // print liveLEDCount and lastLEDCount
-          Serial.print("liveLEDCount: ");
-          Serial.println(liveLEDCount);
-          Serial.print("lastLEDCount: ");
-          Serial.println(lastLEDCount);
+          ++it;
         }
-        // pixels.show(); // Send the updated pixel colors to the hardware.
-        liveLEDMillis = millis();
       }
-      else
-      {
-        // Failed to get JSON data at defined database path, print out the error reason
-        Serial.println(fbdo.errorReason());
-      }
+      // Update Live Overall data
+      Serial.println(updateOverallLive());
+
+      // Check marble saving
+      saveMarbleRequired = checkMarbleSaving();
+
+      liveDataMillis = millis();
     }
-    // Set LED animation
-    if (millis() - lastLEDMillis > ledWait)
+
+    // Update history data every 30 mins
+    if (millis() - historyDataMillis > 1800000 && !saveMarbleRequired)
     {
-      if (liveLEDInitialising)
+      historyDataMillis = millis();
+      Serial.println(updateHistory());
+    }
+
+    // Set NeoPixel color based on live data
+    // if (false) // For test purpose
+    if (Firebase.ready() && !saveMarbleRequired)
+    {
+      // pixels.clear(); // Set all pixel colors to 'off'
+      pixels.setPixelColor(CENTRE_LED, pixels.Color(255, 0, 0));
+      // Get live Data and set LED
+      if (millis() - liveLEDMillis > 60000 || initialising)
       {
-        pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
-        pixels.show();
-        lastLEDCount++;
-        if (lastLEDCount == liveLEDCount)
+        liveLEDMillis = millis();
+
+        String queryPath = defaultPath;
+        queryPath += "sensors/overall/";
+        FirebaseJson query;
+
+        query.set("select/fields/[0]/fieldPath", "power");
+        query.set("select/fields/[1]/fieldPath", "time");
+        query.set("from/collectionId", "live");
+        query.set("from/allDescendants", false);
+        query.set("orderBy/field/fieldPath", "time");
+        query.set("orderBy/direction", "DESCENDING");
+        query.set("limit", 1);
+
+        JsonArray queryResult = queryFirestore(queryPath, query);
+
+        if (queryResult.size() > 0)
         {
-          liveLEDInitialising = false;
+          livePower = queryResult[0]["document"]["fields"]["power"]["integerValue"].as<int>();
+          Serial.printf("Power: %d\n", livePower);
         }
-      }
-      else
-      {
-        if (liveLEDCount - lastLEDCount > 0)
+        else
         {
-          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
+          Serial.println("No query result");
+        }
+
+        // Set LED attribute
+        liveLEDCount = int(map(livePower, 0, roundToHundred(maximumLivePower), 0, maxLiveLED));
+        Serial.printf("liveLEDCount: %d\n", liveLEDCount);
+        // liveLEDCount = (livePower / liveFactor);
+
+        // Run Motor
+        myMotor->run(FORWARD);
+      }
+
+      // Show LED animation
+      if (millis() - lastLEDMillis > ledWait)
+      {
+        if (liveLEDInitialising)
+        {
+          pixels.setPixelColor(CENTRE_LED + lastLEDCount, pixels.Color(232, 229, 88));
           pixels.show();
           lastLEDCount++;
-        }
-        else if (liveLEDCount - lastLEDCount < 0)
-        {
-          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(0, 0, 0));
-          pixels.show();
-          lastLEDCount--;
+          if (lastLEDCount == liveLEDCount)
+          {
+            liveLEDInitialising = false;
+          }
         }
         else
         {
-          pixels.setPixelColor(19 + lastLEDCount, pixels.Color(232, 229, 88));
-          pixels.show();
+          if (liveLEDCount - lastLEDCount > 0)
+          {
+            pixels.setPixelColor(CENTRE_LED + lastLEDCount, pixels.Color(232, 229, 88));
+            pixels.show();
+            lastLEDCount++;
+          }
+          else if (liveLEDCount - lastLEDCount < 0)
+          {
+            pixels.setPixelColor(CENTRE_LED + lastLEDCount, pixels.Color(0, 0, 0));
+            pixels.show();
+            lastLEDCount--;
+          }
+          else
+          {
+            pixels.setPixelColor(CENTRE_LED + lastLEDCount, pixels.Color(232, 229, 88));
+            pixels.show();
+          }
         }
+
+        // Set motor speed
+        int newMotorSpeed = int(map(lastLEDCount, 0, maxLiveLED, 20, 50));
+        if (newMotorSpeed != motorSpeed)
+        {
+          motorSpeed = newMotorSpeed;
+          myMotor->setSpeed(motorSpeed);
+          Serial.print("Motor Speed: ");
+          Serial.println(motorSpeed);
+        }
+
+        lastLEDMillis = millis();
       }
-      // Set motor speed
-      int motorSpeed = int(map(lastLEDCount, 0, 20, 50, 150));
-      // myMotor->setSpeed(motorSpeed);
 
-      lastLEDMillis = millis();
-    }
-
-    // Get history data and set LED
-    if (millis() - dailyLEDMillis > 600000 || initialising)
-    {
-      if (Firebase.RTDB.getJSON(&fbdo, historyPath.c_str(), &query))
+      // Get history data and set LED
+      if (millis() - dailyLEDMillis > 600000 || initialising)
       {
-        String msg = fbdo.jsonString();
-        const char *charMsg = msg.c_str();
-        Serial.println(msg);
-        DeserializationError error = deserializeJson(incomingLive, charMsg);
-        if (error)
+        dailyLEDMillis = millis();
+
+        String queryPath = defaultPath;
+        queryPath += "sensors/overall/";
+        FirebaseJson query;
+
+        query.set("select/fields/[0]/fieldPath", "today");
+        query.set("select/fields/[1]/fieldPath", "time");
+        query.set("from/collectionId", "history");
+        query.set("from/allDescendants", false);
+        query.set("orderBy/field/fieldPath", "time");
+        query.set("orderBy/direction", "DESCENDING");
+        query.set("limit", 1);
+
+        JsonArray queryResult = queryFirestore(queryPath, query);
+
+        if (queryResult.size() > 0)
         {
-          Serial.print(F("deserializeJson() failed: "));
-          Serial.println(error.f_str());
+          float today = queryResult[0]["document"]["fields"]["today"]["doubleValue"].as<float>();
+          Serial.printf("Today: %f\n", today);
+          todayUse = today;
         }
         else
         {
-          for (JsonPair keyValue : incomingLive.as<JsonObject>())
+          Serial.println("No query result");
+        }
+
+        // Set LED attribute
+        for (int i = 0; i < 17; i++)
+        {
+          pixels.setPixelColor(i, pixels.Color(0, 0, 0));
+        }
+        for (int i = 17; i > (17 - int(todayUse * todayFactor)); i--)
+        {
+          pixels.setPixelColor(i, pixels.Color(232, 229, 88));
+          if (i == 0)
           {
-            JsonObject value = keyValue.value();
-            todayUse = value["today"];
-            break; // Exit the loop after the first key-value pair.
-          }
-          for (int i = 0; i < 17; i++)
-          {
-            pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-          }
-          for (int i = 17; i > (17 - int(todayUse * todayFactor)); i--)
-          {
-            pixels.setPixelColor(i, pixels.Color(232, 229, 88));
-            if (i == 0)
-            {
-              break;
-            }
+            break;
           }
         }
         pixels.show();
-        dailyLEDMillis = millis();
+      }
+    }
+
+    // Marble Saving Sequence
+    if (saveMarbleRequired == true)
+    {
+      if (isSavingFinished == true)
+      {
+        // wait for the last marble to drop
+        if (millis() - lastSaveMillis > saveWait * 1.2)
+        {
+          Serial.println("Stopping saving sequence");
+          myMotor->run(RELEASE);
+          myMotor->run(FORWARD);
+          myMotor->setSpeed(motorSpeed);
+          saveMarbleRequired = false;
+          saveAnimationInit = true;
+          isSavingFinished = false;
+        }
       }
       else
       {
-        // Failed to get JSON data at defined database path, print out the error reason
-        Serial.println(fbdo.errorReason());
+        if (saveAnimationInit == true)
+        {
+          myMotor->run(RELEASE);
+          pixels.clear(); // Set all pixel colors to 'off'
+          saveAnimationInit = false;
+        }
+
+        // Set LED animation
+        if (millis() - lastSaveAnimationLEDMillis > ledWait / 3)
+        {
+          pixels.clear();
+          pixels.setPixelColor(saveAnimationLastLEDCount, pixels.Color(232, 238, 247));
+          pixels.setPixelColor(saveAnimationLastLEDCount - 1, pixels.Color(232, 246, 255));
+          pixels.setPixelColor(saveAnimationLastLEDCount - 2, pixels.Color(232, 255, 255));
+          pixels.show();
+          saveAnimationLastLEDCount--;
+          if (saveAnimationLastLEDCount == 0)
+          {
+            saveAnimationLastLEDCount = NUMPIXELS;
+          }
+          lastSaveAnimationLEDMillis = millis();
+        }
+
+        myMotor->run(BACKWARD);
+        myMotor->setSpeed(30);
+        isTouched = digitalRead(33) == LOW ? true : false;
+        if ((millis() - lastSaveMillis > saveWait) && (isTouched == true))
+        {
+          Serial.println("Touch sensor is pressed");
+          savedMarble++;
+          lastSaveMillis = millis();
+          Serial.printf("savedMarble: %d / targetMarble: %d\n", savedMarble, targetMarble);
+        }
+        if (savedMarble >= targetMarble)
+        {
+          Serial.println("Saving is finished");
+          isSavingFinished = true;
+        }
       }
     }
+    else
+    {
+      myMotor->run(FORWARD);
+    }
+
+    initialising = false;
+
+    // Regularly check for MQTT connection
+    mqttClient.loop();
   }
-
-  initialising = false;
-
-  // Read touch sensor value
-  // if (millis() - testMillis > 1000)
-  // {
-  //   Serial.print("touch Value: ");
-  //   Serial.println(touchRead(TOUCH_PIN));
-  //   testMillis = millis();
-  // }
-
-  // Regularly check for MQTT connection
-  mqttClient.loop();
 }
 
 void callback(char *topic, byte *payload, unsigned int length)
@@ -571,6 +702,7 @@ float sumYesterdayUse()
 */
 String updateOverallLive()
 {
+  int powerSum = sumPower();
   String result = "Live Overall Data:";
   String currentTime = getCurrentTime();
   String liveOverallPath = defaultPath;
@@ -581,18 +713,48 @@ String updateOverallLive()
   {
     FirebaseJson overallInitJson;
     overallInitJson.set("fields/created/timestampValue", currentTime);
+    overallInitJson.set("fields/maxPower/integerValue", powerSum);
     Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str(), overallInitJson.raw());
+    maximumLivePower = powerSum;
   }
   else
   {
-    Serial.print("Overall document exists failed: ");
-    Serial.println(fbdo.payload());
+    firestoreJSON.clear();
+    DeserializationError error = deserializeJson(firestoreJSON, fbdo.payload().c_str());
+    if (error)
+    {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+    }
+    else
+    {
+      // serializeJsonPretty(firestoreJSON, Serial);
+      Serial.println("Deserialize JSON success");
+    }
+    int maxPower = firestoreJSON["fields"]["maxPower"]["integerValue"];
+    // Serial.printf("maxPower: %d\n", maxPower);
+    // Serial.printf("powerSum: %d\n", powerSum);
+    FirebaseJson overallInitJson;
+    overallInitJson.set("fields/lastUpdated/timestampValue", currentTime);
+    if (maxPower < powerSum)
+    {
+      overallInitJson.set("fields/maxPower/integerValue", powerSum);
+
+      maximumLivePower = powerSum;
+    }
+
+    bool result = Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str(), overallInitJson.raw(), "lastUpdated,maxPower");
+    if (!result)
+    {
+      Serial.println(fbdo.errorReason());
+      Serial.println(fbdo.payload());
+    }
   }
 
   liveOverallPath += "/live/";
   liveOverallJson.set("fields/time/timestampValue", currentTime);
   liveOverallJson.set("fields/devices/integerValue", deviceCount);
-  liveOverallJson.set("fields/power/integerValue", sumPower());
+  liveOverallJson.set("fields/power/integerValue", powerSum);
 
   if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", liveOverallPath.c_str(), liveOverallJson.raw()))
   {
@@ -655,6 +817,7 @@ String updateHistory()
   historyOverallJson.set("fields/total/doubleValue", sumTotalUse());
   historyOverallJson.set("fields/today/doubleValue", sumTodayUse());
   historyOverallJson.set("fields/yesterday/doubleValue", sumYesterdayUse());
+  historyOverallJson.set("fields/time/timestampValue", currentTime);
 
   if (Firebase.Firestore.createDocument(&fbdo, PROJECT_ID, "", historyOverallPath.c_str(), historyOverallJson.raw()))
   {
@@ -783,4 +946,123 @@ String getCurrentTime()
   strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
 
   return String(buffer);
+}
+
+JsonArray queryFirestore(String path, FirebaseJson query)
+{
+  firestoreJSON.clear();
+  if (Firebase.Firestore.runQuery(&fbdo, PROJECT_ID, "", path, &query))
+  {
+    DeserializationError error = deserializeJson(firestoreJSON, fbdo.payload().c_str());
+
+    // Test if parsing succeeds.
+    if (error)
+    {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+    }
+    // Here's how you can access values in the document
+    return firestoreJSON.as<JsonArray>();
+  }
+}
+
+int roundToHundred(int num)
+{
+  return ((num + 99) / 100) * 100;
+}
+
+void checkButton1()
+{
+  unsigned long currentTime = millis();
+
+  boolean buttonIsPressed = digitalRead(BUTTON1_PIN) == LOW; // Active LOW
+
+  // Check for button state change and do debounce
+  if (buttonIsPressed != Button1Pressed &&
+      currentTime - Button1StateChangeTime > DebounceTime)
+  {
+    // Button state has changed
+    Button1Pressed = buttonIsPressed;
+    Button1StateChangeTime = currentTime;
+
+    if (Button1Pressed)
+    {
+      // Button was just pressed
+      isDebug = true;
+    }
+    else
+    {
+      // Button was just released
+    }
+  }
+
+  if (Button1Pressed)
+  {
+    // Button is being held down
+  }
+}
+
+void checkButton2()
+{
+  unsigned long currentTime = millis();
+
+  boolean buttonIsPressed = digitalRead(BUTTON2_PIN) == LOW; // Active LOW
+
+  // Check for button state change and do debounce
+  if (buttonIsPressed != Button2Pressed &&
+      currentTime - Button2StateChangeTime > DebounceTime)
+  {
+    // Button state has changed
+    Button2Pressed = buttonIsPressed;
+    Button2StateChangeTime = currentTime;
+
+    if (Button2Pressed)
+    {
+      Serial.println("Button 2 is pressed");
+      targetMarble = 2;
+      savedMarble = 0;
+      saveMarbleRequired = true;
+      printf("savedMarble: %d / targetMarble: %d\n", savedMarble, targetMarble);
+      // Button was just pressed
+      if (isDebug)
+      {
+        motorSpeed += 5;
+        // motorSpeed = 10;
+        Serial.printf("Motor Speed: %d\n", motorSpeed);
+      }
+    }
+    else
+    {
+      // Button was just released
+    }
+  }
+
+  if (Button2Pressed)
+  {
+    // Button is being held down
+  }
+}
+
+double calculateCost(float totalEnergyUse)
+{
+  return unitEnergyCost * totalEnergyUse;
+}
+
+bool checkMarbleSaving()
+{
+  targetMarble = round(calculateCost(sumTodayUse()) / targetCost);
+  Serial.printf("targetMarble: %d\n", targetMarble);
+  Serial.printf("savedMarble: %d\n", savedMarble);
+  if (maxMarble >= 10)
+  {
+    return false;
+  }
+  else if (savedMarble >= targetMarble)
+  {
+    return false;
+  }
+  else
+  {
+    return true;
+  }
 }
