@@ -140,6 +140,8 @@ bool Button2Pressed = false;
 bool saveMarbleRequired = false;
 bool isSavingFinished = false;
 bool isLEDOn = true;
+bool stopWheel = false;
+bool stopSaving = false;
 unsigned int livePower = 0;
 unsigned int liveFactor = 15;
 float todayFactor = 20;
@@ -152,22 +154,27 @@ const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 0;
 const int daylightOffset_sec = 0;
 
-bool getUserPreference(bool refresh = false)
+bool getUserPreference(String path = defaultPath.c_str())
 {
+  // Print path using printf
+  Serial.printf("path: %s\n", path.c_str());
   FirebaseJson preferenceJSON;
-  Firebase.Firestore.getDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str());
+  bool isRead = Firebase.Firestore.getDocument(&fbdo, PROJECT_ID, "", path);
+  isRead ? Serial.println("Read Success") : Serial.println("Read Fail");
   FirebaseJson json;
   FirebaseJsonData result;
   json.setJsonData(fbdo.payload());
-  if (!json.get(result, "fields/preference") || refresh == false)
+  if (!json.get(result, "fields/preference"))
   {
     Serial.println("User preference not found. Creating new preference.");
     preferenceJSON.set("fields/preference/mapValue/fields/unitCost/doubleValue", unitEnergyCost);
     preferenceJSON.set("fields/preference/mapValue/fields/targetCost/integerValue", targetCost);
     preferenceJSON.set("fields/preference/mapValue/fields/isLEDOn/booleanValue", isLEDOn);
     preferenceJSON.set("fields/preference/mapValue/fields/isForceStop/booleanValue", isDebug);
+    preferenceJSON.set("fields/preference/mapValue/fields/stopWheel/booleanValue", stopWheel);
+    preferenceJSON.set("fields/preference/mapValue/fields/stopSaving/booleanValue", stopSaving);
 
-    Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str(), preferenceJSON.raw(), "preference");
+    Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", path, preferenceJSON.raw(), "preference");
     return true;
   }
   else
@@ -189,6 +196,14 @@ bool getUserPreference(bool refresh = false)
     if (json.get(result, "fields/preference/mapValue/fields/isForceStop/booleanValue"))
     {
       isDebug = result.to<bool>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/stopWheel/booleanValue"))
+    {
+      stopWheel = result.to<bool>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/stopSaving/booleanValue"))
+    {
+      stopSaving = result.to<bool>();
     }
     return true;
   }
@@ -288,45 +303,32 @@ void setup()
   // Touch sensor
   pinMode(33, INPUT_PULLUP);
 
-  getUserPreference(false);
+  getUserPreference(defaultPath.c_str());
 }
 
 void loop()
 {
+  // if time is after 7pm and before 8am, turn off the LED using timeinfo
+  struct tm tinfo;
+  getLocalTime(&tinfo);
+  // Serial.printf("Hour: %d\n", tinfo.tm_hour);
+  if (tinfo.tm_hour >= 19 && tinfo.tm_hour <= 8)
+  // if (tinfo.tm_min >= 7 && tinfo.tm_min < 8)
+  {
+    isDebug = true;
+  }
+  else
+  {
+    isDebug = false;
+  }
+
   checkButton1();
   checkButton2();
   if (isDebug)
   {
-    if (debugInit)
-    {
-      Serial.println("Button 1 is pressed : Debug Mode");
-      motorSpeed = 0;
-      debugInit = false;
-    }
-
-    mqttClient.disconnect();
-    // myMotor->run(FORWARD);
-    myMotor->run(BACKWARD);
-    myMotor->setSpeed(20);
-
-    // Read touch sensor value
-    // if (millis() - testMillis > 5)
-    // {
-    // int tempRead = touchRead(TOUCH_PIN);
-    // if (touchValue != tempRead)
-    // {
-    //   touchValue = tempRead;
-    //   Serial.print("touch Value: ");
-    //   Serial.println(touchValue);
-    // }
-    testMillis = millis();
-    int readdd = digitalRead(33);
-    if (readdd == LOW)
-    {
-      savedMarble++;
-      Serial.printf("savedMarble: %d / targetMarble: %d\n", savedMarble, targetMarble);
-    }
-    // }
+    myMotor->setSpeed(0);
+    myMotor->run(RELEASE);
+    pixels.clear();
   }
   else
   {
@@ -362,10 +364,13 @@ void loop()
       Serial.println(updateOverallLive());
 
       // Check marble saving
-      saveMarbleRequired = checkMarbleSaving();
+      if (stopSaving == false)
+      {
+        saveMarbleRequired = checkMarbleSaving();
+      }
 
       // Refresh User Preference
-      getUserPreference(true);
+      getUserPreference(defaultPath.c_str());
 
       liveDataMillis = millis();
     }
@@ -414,7 +419,14 @@ void loop()
 
         // Set LED attribute
         liveLEDCount = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 0, maxLiveLED));
-        motorSpeed = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 20, 50));
+        if (stopWheel == false)
+        {
+          motorSpeed = int(mapValue(livePower, 0, roundToHundred(maximumLivePower), 20, 50));
+        }
+        else
+        {
+          motorSpeed = 0;
+        }
       }
     }
 
@@ -506,7 +518,7 @@ void loop()
     ////////////////////////////////
     // Set Motor Speed
     ////////////////////////////////
-    if (true && !saveMarbleRequired)
+    if (!saveMarbleRequired)
     {
       myMotor->run(FORWARD);
       myMotor->setSpeed(motorSpeed);
