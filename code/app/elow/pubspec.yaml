@@ -41,6 +41,26 @@ dependencies:
   cloud_firestore: ^4.8.3
   syncfusion_flutter_gauges: ^22.2.5
   syncfusion_flutter_charts: ^22.2.5
+  url_launcher: ^6.1.12
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  image_path_android: "asset/images/logo.png"
+  image_path_ios: "asset/images/logo.png"
+  android: true
+  ios: true
+  image_path: "asset/images/logo.png"
+  min_sdk_android: 21 # android min sdk min:16, default 21
+  web:
+    generate: true
+    image_path: "asset/images/logo.png"
+  windows:
+    generate: true
+    image_path: "asset/images/logo.png"
+    icon_size: 48 # min:48, max:256, default: 48
+  macos:
+    generate: true
+    image_path: "asset/images/logo.png"
 
 dev_dependencies:
   flutter_test:

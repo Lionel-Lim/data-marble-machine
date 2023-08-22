@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:elow/screen/dashboard.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -68,6 +69,24 @@ class _LoginState extends State<Login> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(code)));
     }
     throw Exception("signup failed");
+  }
+
+  Future<bool> checkUserDevice(String uid) async {
+    bool isDeviceExist = false;
+    // get device/$uid document
+    await FirebaseFirestore.instance
+        .collection("device")
+        .doc(uid)
+        .get()
+        .then((snapshot) {
+      print(snapshot.data());
+      if (snapshot.exists) {
+        isDeviceExist = true;
+      } else {
+        isDeviceExist = false;
+      }
+    });
+    return isDeviceExist;
   }
 
   Widget inputs(bool isCreateAccount) {
@@ -193,13 +212,22 @@ class _LoginState extends State<Login> {
                             emailInputController.text,
                             passwordInputController.text,
                             context);
+                        bool isDeviceExist =
+                            await checkUserDevice(credential.user!.uid);
                         if (context.mounted) {
-                          Navigator.pushNamedAndRemoveUntil(
-                            context,
-                            '/main',
-                            (route) => false,
-                            arguments: credential,
-                          );
+                          if (isDeviceExist) {
+                            Navigator.pushNamedAndRemoveUntil(
+                              context,
+                              '/main',
+                              (route) => false,
+                              arguments: credential,
+                            );
+                          } else {
+                            Navigator.pushNamed(
+                              context,
+                              '/devicesetup',
+                            );
+                          }
                         }
                       }
                     },
@@ -213,6 +241,14 @@ class _LoginState extends State<Login> {
   final emailInputController = TextEditingController();
   final passwordInputController = TextEditingController();
   bool isCreateAccount = false;
+
+  @override
+  void dispose() {
+    nameInputController.dispose();
+    emailInputController.dispose();
+    passwordInputController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +311,7 @@ class _LoginState extends State<Login> {
                           child: const Text("Login with test account"),
                           onPressed: () async {
                             final UserCredential credential = await login(
-                                "test@dylim.dev", "123456", context);
+                                "temp@dylim.dev", "temp!temp!", context);
                             if (context.mounted) {
                               Navigator.pushNamedAndRemoveUntil(
                                 context,

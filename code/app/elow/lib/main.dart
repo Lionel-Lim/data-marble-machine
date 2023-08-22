@@ -1,4 +1,6 @@
+import 'package:elow/screen/countdown.dart';
 import 'package:elow/screen/dashboard.dart';
+import 'package:elow/screen/devicesetup.dart';
 import 'package:elow/screen/login.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -47,9 +49,12 @@ class MyApp extends StatelessWidget {
       //Remove the line below when you are ready to test with a real user.
       //
       // home: Dashboard(credential: tempCredential),
-      initialRoute: '/login',
+      initialRoute: '/',
       onGenerateRoute: (RouteSettings settings) {
         switch (settings.name) {
+          case '/':
+            return MaterialPageRoute(
+                builder: (context) => const CountdownScreen());
           case '/login':
             FirebaseAuth auth = FirebaseAuth.instance;
             return MaterialPageRoute(builder: (context) => Login(auth: auth));
@@ -58,6 +63,8 @@ class MyApp extends StatelessWidget {
                 settings.arguments as UserCredential;
             return MaterialPageRoute(
                 builder: (context) => Dashboard(credential: credential));
+          case '/devicesetup':
+            return MaterialPageRoute(builder: (context) => const DeviceSetUp());
           default:
             return null; // Throw an error page or handle unknown routes
         }

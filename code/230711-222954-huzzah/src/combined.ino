@@ -125,6 +125,8 @@ int savedMarble = 0;
 int targetMarble = 0;
 int maxMarble = 10;
 int isTouched = 0;
+int startTime = 8;
+int endTime = 19;
 std::map<String, DeviceData> deviceList;
 FirebaseJson liveOverallJson;
 FirebaseJson historyOverallJson;
@@ -142,6 +144,7 @@ bool isSavingFinished = false;
 bool isLEDOn = true;
 bool stopWheel = false;
 bool stopSaving = false;
+bool isRestarting = false;
 unsigned int livePower = 0;
 unsigned int liveFactor = 15;
 float todayFactor = 20;
@@ -173,6 +176,9 @@ bool getUserPreference(String path = defaultPath.c_str())
     preferenceJSON.set("fields/preference/mapValue/fields/isForceStop/booleanValue", isDebug);
     preferenceJSON.set("fields/preference/mapValue/fields/stopWheel/booleanValue", stopWheel);
     preferenceJSON.set("fields/preference/mapValue/fields/stopSaving/booleanValue", stopSaving);
+    preferenceJSON.set("fields/preference/mapValue/fields/isRestarting/booleanValue", isRestarting);
+    preferenceJSON.set("fields/preference/mapValue/fields/startTime/integerValue", startTime);
+    preferenceJSON.set("fields/preference/mapValue/fields/endTime/integerValue", endTime);
 
     Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", path, preferenceJSON.raw(), "preference");
     return true;
@@ -204,6 +210,18 @@ bool getUserPreference(String path = defaultPath.c_str())
     if (json.get(result, "fields/preference/mapValue/fields/stopSaving/booleanValue"))
     {
       stopSaving = result.to<bool>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/isRestarting/booleanValue"))
+    {
+      isRestarting = result.to<bool>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/startTime/integerValue"))
+    {
+      startTime = result.to<int>();
+    }
+    if (json.get(result, "fields/preference/mapValue/fields/endTime/integerValue"))
+    {
+      endTime = result.to<int>();
     }
     return true;
   }
@@ -308,11 +326,27 @@ void setup()
 
 void loop()
 {
+  if (isRestarting == true)
+  {
+    // Change isRestarting to false in Firestore
+    FirebaseJson restartJson;
+    restartJson.set("fields/preference/mapValue/fields/unitCost/doubleValue", unitEnergyCost);
+    restartJson.set("fields/preference/mapValue/fields/targetCost/integerValue", targetCost);
+    restartJson.set("fields/preference/mapValue/fields/isLEDOn/booleanValue", isLEDOn);
+    restartJson.set("fields/preference/mapValue/fields/isForceStop/booleanValue", isDebug);
+    restartJson.set("fields/preference/mapValue/fields/stopWheel/booleanValue", stopWheel);
+    restartJson.set("fields/preference/mapValue/fields/stopSaving/booleanValue", stopSaving);
+    restartJson.set("fields/preference/mapValue/fields/isRestarting/booleanValue", false);
+    restartJson.set("fields/preference/mapValue/fields/startTime/integerValue", startTime);
+    restartJson.set("fields/preference/mapValue/fields/endTime/integerValue", endTime);
+    Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", defaultPath.c_str(), restartJson.raw(), "preference");
+    ESP.restart();
+  }
   // if time is after 7pm and before 8am, turn off the LED using timeinfo
   struct tm tinfo;
   getLocalTime(&tinfo);
   // Serial.printf("Hour: %d\n", tinfo.tm_hour);
-  if (tinfo.tm_hour >= 19 && tinfo.tm_hour <= 8)
+  if (tinfo.tm_hour >= endTime && tinfo.tm_hour < startTime)
   // if (tinfo.tm_min >= 7 && tinfo.tm_min < 8)
   {
     isDebug = true;
@@ -453,7 +487,10 @@ void loop()
         {
           if (liveLEDCount - lastLEDCount > 0)
           {
-            pixels.setPixelColor(CENTRE_LED + lastLEDCount, pixels.Color(232, 229, 88));
+            for (int i = 1; i < liveLEDCount; i++)
+            {
+              pixels.setPixelColor(CENTRE_LED + i, pixels.Color(232, 229, 88));
+            }
             pixels.show();
             lastLEDCount++;
           }
@@ -1073,7 +1110,7 @@ void checkButton1()
     if (Button1Pressed)
     {
       // Button was just pressed
-      isDebug = true;
+      ESP.restart();
     }
     else
     {
