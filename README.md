@@ -37,6 +37,7 @@ git clone https://github.com/Lionel-Lim/data-marble-machine
 ## **How to Make**
 
 <p align="center"> <img src="https://raw.githubusercontent.com/Lionel-Lim/data-marble-machine/main/report/resource/printedcomponents.jpeg" width="500" alt="Printed materials">
+
 1. **Required Components, Materials and Machines**
 - **Components**
     - [Adafruit ESP32 Feather V2 - 8MB Flash + 2 MB PSRAM - STEMMA QT](https://www.adafruit.com/product/5400 "https://www.adafruit.com/product/5400")
